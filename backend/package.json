@@ -34,6 +34,7 @@
     "pdfkit": "^0.19.1"
   },
   "devDependencies": {
-    "mongodb-memory-server": "^11.2.0"
+    "mongodb-memory-server": "^11.2.0",
+    "ssh2": "^1.17.0"
   }
 }
