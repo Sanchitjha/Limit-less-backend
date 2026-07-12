@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-export const PAYMENT_STATUSES = ['pending', 'paid', 'demo', 'free', 'trial'];
+export const PAYMENT_STATUSES = ['pending', 'paid', 'demo', 'free', 'trial', 'suspended'];
 
 const userSchema = new mongoose.Schema(
   {
