@@ -126,6 +126,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
     pending_users: statusCount.pending || 0,
     demo_users: (statusCount.demo || 0) + (statusCount.trial || 0),
     free_users: statusCount.free || 0,
+    suspended_users: statusCount.suspended || 0,
     completed_assessments: completedAssessments,
     users_with_report: usersWithReport.length,
     new_users_24h: newUsers24h,
