@@ -2,7 +2,7 @@ import { Router } from 'express';
 import mongoose from 'mongoose';
 import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
-import { User, sanitizeUser } from '../db/models/User.js';
+import { User, sanitizeUser, PAYMENT_STATUSES } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
 import { Enquiry, sanitizeEnquiry } from '../db/models/Enquiry.js';
 import { requireDb, requireAdmin, signAdminToken } from '../middleware/auth.js';
@@ -86,6 +86,34 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
   await deleteUserFiles(String(user._id)).catch(() => {}); // best-effort GridFS cleanup
 
   res.json({ success: true, deletedUser: sanitizeUser(user), deletedAssessments: deletedCount });
+});
+
+/** PUT /api/admin/users/:id/plan — upgrade or downgrade user plan level. */
+router.put('/users/:id/plan', requireAdmin, async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const body = req.body || {};
+  const paymentStatus = asString(body.payment_status, 'payment_status', { required: true });
+
+  if (!PAYMENT_STATUSES.includes(paymentStatus)) {
+    return res.status(400).json({
+      error: `Invalid payment_status. Allowed values: ${PAYMENT_STATUSES.join(', ')}`,
+    });
+  }
+
+  const user = await User.findById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const oldStatus = user.payment_status;
+  user.payment_status = paymentStatus;
+  await user.save();
+
+  console.log(`[admin] User plan updated: ${user.email} (${oldStatus} -> ${paymentStatus})`);
+
+  const [result] = await attachAssessments([user]);
+  res.json({ success: true, user: result });
 });
 
 /** GET /api/admin/enquiries — all enquiries, newest first. */

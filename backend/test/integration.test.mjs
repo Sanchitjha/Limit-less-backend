@@ -353,6 +353,21 @@ await check('GET /api/admin/enquiries lists enquiries; DELETE removes one', asyn
   assert.equal(after.data.length, 0);
 });
 
+await check('PUT /api/admin/users/:id/plan upgrades/downgrades user plan', async () => {
+  const up = await api('PUT', `/api/admin/users/${userId}/plan`, {
+    token: adminToken,
+    body: { payment_status: 'paid' },
+  });
+  assert.equal(up.status, 200);
+  assert.equal(up.data.user.payment_status, 'paid');
+
+  const bad = await api('PUT', `/api/admin/users/${userId}/plan`, {
+    token: adminToken,
+    body: { payment_status: 'invalid_status' },
+  });
+  assert.equal(bad.status, 400);
+});
+
 await check('DELETE /api/admin/users/:id cascades assessments', async () => {
   const r = await api('DELETE', `/api/admin/users/${userId}`, { token: adminToken });
   assert.equal(r.status, 200);
