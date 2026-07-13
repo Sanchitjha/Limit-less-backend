@@ -1,10 +1,17 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import { config, features } from '../config.js';
 import { User, sanitizeUser } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
+import { Otp } from '../db/models/Otp.js';
 import { requireDb, signUserToken } from '../middleware/auth.js';
 import { assert, asInt, asString } from '../middleware/validate.js';
-import { sendCredentialsEmail, sendAdminNotification } from '../services/emailService.js';
+import {
+  sendCredentialsEmail,
+  sendAdminNotification,
+  sendOtpEmail,
+} from '../services/emailService.js';
 
 const router = Router();
 router.use(requireDb);
@@ -13,6 +20,105 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const generateTempPassword = () =>
   Math.random().toString(36).slice(-8).toUpperCase().padEnd(8, 'X');
+
+// ── Email OTP verification ───────────────────────────────────────────────────
+
+const OTP_TTL_MINUTES = 10; // code validity
+const OTP_VERIFIED_TTL_MINUTES = 30; // window to complete registration after verify
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+const OTP_MAX_ATTEMPTS = 5;
+
+const hashOtp = (email, otp) =>
+  crypto.createHmac('sha256', config.jwtSecret).update(`${email}:${otp}`).digest('hex');
+
+/**
+ * POST /api/auth/send-otp
+ * Body: { email, name? }
+ * Emails a 6-digit verification code (10 min validity, 60s resend cooldown).
+ * 409 if the email is already registered. In non-production environments
+ * WITHOUT SMTP configured, the code is returned as `devOtp` for testing.
+ */
+router.post('/send-otp', async (req, res) => {
+  const body = req.body || {};
+  const email = asString(body.email, 'email', { required: true, maxLength: 320 }).toLowerCase();
+  assert(EMAIL_RE.test(email), 'email must be a valid email address', ['email']);
+  const name = asString(body.name, 'name', { required: false, maxLength: 200 });
+
+  const existingUser = await User.findOne({ email }).lean();
+  if (existingUser) {
+    return res.status(409).json({ error: 'This email is already registered. Please log in instead.' });
+  }
+
+  const existing = await Otp.findOne({ email });
+  if (existing && Date.now() - existing.last_sent_at.getTime() < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+    return res.status(429).json({
+      error: `Please wait a minute before requesting another code.`,
+    });
+  }
+
+  const otp = String(crypto.randomInt(100000, 1000000)); // 6 digits, crypto-secure
+
+  await Otp.findOneAndUpdate(
+    { email },
+    {
+      email,
+      otp_hash: hashOtp(email, otp),
+      attempts: 0,
+      verified: false,
+      expires_at: new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000),
+      last_sent_at: new Date(),
+    },
+    { upsert: true, new: true }
+  );
+
+  if (features.email) {
+    const result = await sendOtpEmail({ email, name, otp });
+    if (!result.sent) {
+      return res.status(502).json({ error: 'Could not send the verification email. Please try again.' });
+    }
+  } else if (config.nodeEnv === 'production') {
+    return res.status(503).json({ error: 'Email service is not configured on the server.' });
+  }
+
+  res.json({
+    sent: true,
+    expiresInMinutes: OTP_TTL_MINUTES,
+    // Testing convenience only — never present when SMTP is configured or in production
+    ...(!features.email && config.nodeEnv !== 'production' ? { devOtp: otp } : {}),
+  });
+});
+
+/**
+ * POST /api/auth/verify-otp
+ * Body: { email, otp }
+ * Marks the email as verified (valid for 30 minutes to complete registration).
+ * Max 5 wrong attempts per code.
+ */
+router.post('/verify-otp', async (req, res) => {
+  const body = req.body || {};
+  const email = asString(body.email, 'email', { required: true, maxLength: 320 }).toLowerCase();
+  const otp = asString(body.otp, 'otp', { required: true, maxLength: 10 }).trim();
+
+  const record = await Otp.findOne({ email });
+  if (!record || record.expires_at < new Date()) {
+    return res.status(400).json({ error: 'Code expired or not requested. Please request a new code.' });
+  }
+  if (record.attempts >= OTP_MAX_ATTEMPTS) {
+    return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
+  }
+
+  if (hashOtp(email, otp) !== record.otp_hash) {
+    record.attempts += 1;
+    await record.save();
+    return res.status(400).json({ error: 'OTP invalid' });
+  }
+
+  record.verified = true;
+  record.expires_at = new Date(Date.now() + OTP_VERIFIED_TTL_MINUTES * 60 * 1000);
+  await record.save();
+
+  res.json({ verified: true });
+});
 
 /** Match either the plaintext temp password or the bcrypt hash. */
 const passwordMatches = async (user, password) => {
@@ -48,6 +154,14 @@ router.post('/register', async (req, res) => {
     return res.status(409).json({ error: 'This email is already registered. Please log in instead.' });
   }
 
+  // Email must be verified with an OTP first (disable with OTP_REQUIRED=false)
+  if (config.otpRequired) {
+    const otpRecord = await Otp.findOne({ email, verified: true, expires_at: { $gt: new Date() } });
+    if (!otpRecord) {
+      return res.status(403).json({ error: 'Please verify your email with the OTP first.' });
+    }
+  }
+
   const tempPassword = generateTempPassword();
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
@@ -61,6 +175,9 @@ router.post('/register', async (req, res) => {
     age,
     gender,
   });
+
+  // Consume the OTP so it can't be reused
+  Otp.deleteOne({ email }).catch(() => {});
 
   // Best-effort emails — never block or fail registration.
   sendCredentialsEmail({ name, email, tempPassword, paymentStatus: user.payment_status }).catch(() => {});

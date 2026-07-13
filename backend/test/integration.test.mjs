@@ -29,6 +29,11 @@ process.env.JWT_SECRET = 'test-secret';
 process.env.ADMIN_USERNAME = 'admin';
 process.env.ADMIN_PASSWORD = 'limitlessadmin';
 process.env.PORT = '0';
+// Never send real emails from tests (also enables devOtp in send-otp responses)
+process.env.SMTP_HOST = '';
+process.env.SMTP_USER = '';
+process.env.SMTP_PASS = '';
+process.env.NODE_ENV = 'test';
 
 const { connectMongo, disconnectMongo } = await import('../src/db/mongo.js');
 await connectMongo();
@@ -77,6 +82,48 @@ await check('POST /api/v1/generate-questions', async () => {
 });
 
 // ── Auth flow ────────────────────────────────────────────────────────────────
+
+/** Complete the OTP verification for an email (uses devOtp from the response). */
+const verifyEmailOtp = async (email) => {
+  const sent = await api('POST', '/api/auth/send-otp', { body: { email } });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.devOtp, 'devOtp expected when SMTP is not configured');
+  const verified = await api('POST', '/api/auth/verify-otp', {
+    body: { email, otp: sent.data.devOtp },
+  });
+  assert.equal(verified.status, 200);
+  return sent.data.devOtp;
+};
+
+await check('register without OTP verification → 403', async () => {
+  const r = await api('POST', '/api/auth/register', {
+    body: { name: 'No Otp', email: 'no.otp@example.com' },
+  });
+  assert.equal(r.status, 403);
+});
+
+await check('send-otp + wrong code → 400, correct code verifies', async () => {
+  const sent = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.devOtp);
+
+  const bad = await api('POST', '/api/auth/verify-otp', {
+    body: { email: 'test.user@example.com', otp: '000000' },
+  });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.data.error, 'OTP invalid');
+
+  const good = await api('POST', '/api/auth/verify-otp', {
+    body: { email: 'test.user@example.com', otp: sent.data.devOtp },
+  });
+  assert.equal(good.status, 200);
+  assert.equal(good.data.verified, true);
+});
+
+await check('send-otp resend within cooldown → 429', async () => {
+  const r = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
+  assert.equal(r.status, 429);
+});
 
 await check('POST /api/auth/register creates user + returns temp password & JWT', async () => {
   const r = await api('POST', '/api/auth/register', {
@@ -309,9 +356,11 @@ await check('user token cannot access admin routes (403)', async () => {
 });
 
 await check('user cannot access another user (403)', async () => {
+  await verifyEmailOtp('other@example.com');
   const other = await api('POST', '/api/auth/register', {
     body: { name: 'Other', email: 'other@example.com' },
   });
+  assert.equal(other.status, 201);
   const r = await api('GET', `/api/users/${other.data.user.id}`, { token: userToken });
   assert.equal(r.status, 403);
 });
