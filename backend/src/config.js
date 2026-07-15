@@ -57,6 +57,7 @@ export const config = {
 
   // Optional Stripe webhook verification
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
 
   // Optional backend email (Nodemailer / SMTP)
   smtp: {

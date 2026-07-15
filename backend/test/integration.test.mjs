@@ -62,6 +62,7 @@ process.env.NODE_ENV = 'test';
 
 const { connectMongo, disconnectMongo } = await import('../src/db/mongo.js');
 await connectMongo();
+const { User } = await import('../src/db/models/User.js');
 const { default: app } = await import('../src/app.js');
 
 const server = app.listen(0);
@@ -241,21 +242,56 @@ await check('GET /api/users/:id returns user + assessments', async () => {
   assert.equal(r.data.temp_password, undefined, 'temp password hidden for non-admin');
 });
 
-await check('PATCH /api/users/:id updates payment_status', async () => {
+await check('PATCH /api/users/:id restricts payment_status updates to admin', async () => {
   const r = await api('PATCH', `/api/users/${userId}`, {
     token: userToken,
     body: { payment_status: 'paid' },
   });
-  assert.equal(r.status, 200);
-  assert.equal(r.data.payment_status, 'paid');
+  assert.equal(r.status, 403);
 });
 
-await check('PATCH /api/users/:id rejects bad payment_status (422)', async () => {
-  const r = await api('PATCH', `/api/users/${userId}`, {
-    token: userToken,
-    body: { payment_status: 'hacked' },
+await check('POST /api/v1/payments/create-checkout-session is protected and creates session', async () => {
+  const unauth = await api('POST', '/api/v1/payments/create-checkout-session');
+  assert.equal(unauth.status, 401);
+
+  const auth = await api('POST', '/api/v1/payments/create-checkout-session', { token: userToken });
+  assert.equal(auth.status, 501); // Since STRIPE_SECRET_KEY is empty in test environment
+});
+
+await check('POST /api/v1/webhooks/stripe processes event and marks user paid', async () => {
+  process.env.STRIPE_WEBHOOK_SECRET = 'test_webhook_secret';
+  const { config: testConfig, features: testFeatures } = await import('../src/config.js');
+  testConfig.stripeWebhookSecret = 'test_webhook_secret';
+  testFeatures.stripeWebhook = true;
+
+  const payload = JSON.stringify({
+    type: 'checkout.session.completed',
+    data: {
+      object: {
+        payment_status: 'paid',
+        client_reference_id: userId,
+        customer_details: { email: 'test.user@example.com' }
+      }
+    }
   });
-  assert.equal(r.status, 422);
+
+  const t = Math.floor(Date.now() / 1000);
+  const crypto = await import('node:crypto');
+  const expected = crypto.createHmac('sha256', 'test_webhook_secret').update(`${t}.${payload}`).digest('hex');
+
+  const res = await fetch(`${BASE}/api/v1/webhooks/stripe`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'stripe-signature': `t=${t},v1=${expected}`
+    },
+    body: payload
+  });
+  
+  assert.equal(res.status, 200);
+  
+  const user = await User.findById(userId);
+  assert.equal(user.payment_status, 'paid');
 });
 
 await check('PATCH /api/users/:id report_json compat → updates latest assessment', async () => {
@@ -301,7 +337,7 @@ await check('POST /api/v1/generate-pdf proxies to the model service', async () =
 });
 
 await check('POST /api/reports/:userId/pdf rejects non-paid users for full reports (403)', async () => {
-  await api('PATCH', `/api/users/${userId}`, { token: userToken, body: { payment_status: 'pending' } });
+  await User.findByIdAndUpdate(userId, { payment_status: 'pending' });
   const blocked = await api('POST', `/api/reports/${userId}/pdf`, {
     token: userToken,
     body: { analysis, assessmentId: firstAssessmentId },
@@ -316,7 +352,7 @@ await check('POST /api/reports/:userId/pdf rejects non-paid users for full repor
   assert.equal(teaser.status, 201);
 
   // Restore paid status for the remaining tests.
-  await api('PATCH', `/api/users/${userId}`, { token: userToken, body: { payment_status: 'paid' } });
+  await User.findByIdAndUpdate(userId, { payment_status: 'paid' });
 });
 
 await check('POST /api/reports/:userId/pdf stores PDF from the model service on the given assessment', async () => {

@@ -73,17 +73,37 @@ router.post('/stripe', raw({ type: 'application/json' }), async (req, res) => {
   try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data?.object || {};
+      const userId = session.client_reference_id;
       const email = session.customer_details?.email || session.customer_email;
       const paymentOk = session.payment_status ? session.payment_status === 'paid' : true;
 
-      if (email && paymentOk) {
-        const { modifiedCount } = await User.updateMany(
-          { email: String(email).trim().toLowerCase() },
-          { $set: { payment_status: 'paid' } }
-        );
-        console.log(`[stripe] checkout completed for ${email} — ${modifiedCount} user(s) marked paid`);
+      if (paymentOk) {
+        let updated = false;
+        if (userId) {
+          const user = await User.findById(userId);
+          if (user) {
+            user.payment_status = 'paid';
+            await user.save();
+            console.log(`[stripe] checkout completed for user ID ${userId} (${user.email}) — marked paid`);
+            updated = true;
+          }
+        }
+
+        // Fallback to email matching
+        if (!updated && email) {
+          const { modifiedCount } = await User.updateMany(
+            { email: String(email).trim().toLowerCase() },
+            { $set: { payment_status: 'paid' } }
+          );
+          console.log(`[stripe] checkout completed for email ${email} — ${modifiedCount} user(s) marked paid`);
+          updated = modifiedCount > 0;
+        }
+
+        if (!updated) {
+          console.warn(`[stripe] checkout.session.completed received but user not found for ID: ${userId}, Email: ${email}`);
+        }
       } else {
-        console.warn('[stripe] checkout.session.completed without a usable email — skipped');
+        console.warn('[stripe] checkout.session.completed received but payment not completed');
       }
     }
     // Acknowledge everything else so Stripe stops retrying.

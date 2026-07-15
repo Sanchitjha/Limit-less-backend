@@ -14,6 +14,7 @@ import adminRoutes from './routes/admin.routes.js';
 import plansRoutes from './routes/plans.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import enquiriesRoutes from './routes/enquiries.routes.js';
+import paymentRoutes from './routes/payment.routes.js';
 import { publicFilesRouter, apiFilesRouter } from './routes/files.routes.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
@@ -88,6 +89,7 @@ app.use('/api/v1', generationLimiter, assessmentRoutes);
 app.use('/api/v1', pdfRoutes);
 
 // Database-backed REST API (MongoDB)
+app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/assessments', assessmentsRoutes);

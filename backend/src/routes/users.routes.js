@@ -60,6 +60,9 @@ router.patch('/:id', requireSelfOrAdmin('id'), async (req, res) => {
   }
   if (body.gender !== undefined) user.gender = String(body.gender).slice(0, 30);
   if (body.payment_status !== undefined) {
+    if (req.auth.role !== 'admin') {
+      return res.status(403).json({ error: 'Only administrators can update payment status directly.' });
+    }
     assert(
       PAYMENT_STATUSES.includes(body.payment_status),
       `payment_status must be one of: ${PAYMENT_STATUSES.join(', ')}`,
