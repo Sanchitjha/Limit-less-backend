@@ -32,6 +32,12 @@ export const config = {
   // Falls back to the incoming request's host when unset.
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, ''),
 
+  // AI report-generation model service ("Akshay's model") — the sole source
+  // of truth for assessment PDFs. Never generate reports locally.
+  modelServiceUrl: (
+    process.env.MODEL_SERVICE_URL || 'https://limitless-model.160-153-179-249.sslip.io'
+  ).replace(/\/+$/, ''),
+
   // MongoDB
   mongoUri: process.env.MONGODB_URI || '',
   mongoDbName: process.env.MONGODB_DB_NAME || 'limitless',

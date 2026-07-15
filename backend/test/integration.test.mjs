@@ -4,7 +4,32 @@
  */
 
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+
+// A minimal stand-in for the AI report-generation model service ("Akshay's
+// model"). Returns a distinct, recognizable PDF per call so tests can prove
+// the backend proxies to THIS service (never generates PDFs itself) and
+// correctly maps each PDF to a specific assessment.
+let modelServiceCallCount = 0;
+const modelServiceRequests = [];
+const fakePdf = (label) => Buffer.from(`%PDF-1.4\n% mock-model-pdf:${label}\n%%EOF`);
+const modelService = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (chunk) => { body += chunk; });
+  req.on('end', () => {
+    modelServiceCallCount += 1;
+    let parsed = {};
+    try { parsed = JSON.parse(body); } catch { /* ignore */ }
+    modelServiceRequests.push({ path: req.url, body: parsed });
+    const teaser = req.url.includes('teaser');
+    const label = `${teaser ? 'teaser' : 'full'}:${parsed?.analysis?.assessmentId ?? 'none'}:${modelServiceCallCount}`;
+    res.writeHead(200, { 'Content-Type': 'application/pdf' });
+    res.end(fakePdf(label));
+  });
+});
+await new Promise((resolve) => modelService.listen(0, resolve));
+process.env.MODEL_SERVICE_URL = `http://127.0.0.1:${modelService.address().port}`;
 
 const results = [];
 const check = (name, fn) =>
@@ -60,7 +85,7 @@ const api = async (method, path, { body, token, raw: rawBody, contentType } = {}
   return { status: res.status, data, contentType: ct };
 };
 
-let userToken, userId, adminToken, tempPassword, assessmentId, analysis, pdfUrl;
+let userToken, userId, adminToken, tempPassword, assessmentId, analysis, pdfUrl, firstAssessmentId;
 
 // ── Health & stateless engine ────────────────────────────────────────────────
 
@@ -197,6 +222,7 @@ await check('POST /api/v1/analyze persists assessment when userId given', async 
   assert.ok(r.data.overall.score >= 0 && r.data.overall.score <= 100);
   assert.ok(r.data.assessmentRecordId, 'assessment should be auto-saved');
   analysis = r.data;
+  firstAssessmentId = r.data.assessmentRecordId;
 });
 
 // ── Users API ────────────────────────────────────────────────────────────────
@@ -262,23 +288,81 @@ await check('PATCH /api/assessments/:id saves pdf_url', async () => {
 });
 
 // ── PDF generation + GridFS storage ─────────────────────────────────────────
+// All PDF content must come from the AI model service ("Akshay's model") —
+// never generated locally. The mock model service above stands in for it.
 
-await check('POST /api/v1/generate-pdf returns a PDF', async () => {
+await check('POST /api/v1/generate-pdf proxies to the model service', async () => {
+  const callsBefore = modelServiceCallCount;
   const r = await api('POST', '/api/v1/generate-pdf', { body: { analysis } });
   assert.equal(r.status, 200);
   assert.ok(r.contentType.includes('application/pdf'));
   assert.ok(Buffer.from(r.data).subarray(0, 5).toString() === '%PDF-');
+  assert.equal(modelServiceCallCount, callsBefore + 1, 'must call the model service, not generate locally');
 });
 
-await check('POST /api/reports/:userId/pdf stores PDF + updates assessment', async () => {
+await check('POST /api/reports/:userId/pdf rejects non-paid users for full reports (403)', async () => {
+  await api('PATCH', `/api/users/${userId}`, { token: userToken, body: { payment_status: 'pending' } });
+  const blocked = await api('POST', `/api/reports/${userId}/pdf`, {
+    token: userToken,
+    body: { analysis, assessmentId: firstAssessmentId },
+  });
+  assert.equal(blocked.status, 403);
+
+  // Teaser generation must still be allowed for non-paid accounts.
+  const teaser = await api('POST', `/api/reports/${userId}/pdf`, {
+    token: userToken,
+    body: { analysis, assessmentId: firstAssessmentId, teaser: true },
+  });
+  assert.equal(teaser.status, 201);
+
+  // Restore paid status for the remaining tests.
+  await api('PATCH', `/api/users/${userId}`, { token: userToken, body: { payment_status: 'paid' } });
+});
+
+await check('POST /api/reports/:userId/pdf stores PDF from the model service on the given assessment', async () => {
+  const callsBefore = modelServiceCallCount;
   const r = await api('POST', `/api/reports/${userId}/pdf`, {
     token: userToken,
-    body: { analysis },
+    body: { analysis, assessmentId: firstAssessmentId },
   });
   assert.equal(r.status, 201);
   assert.ok(r.data.pdfUrl.includes(`/files/pdf-reports/${userId}/`));
+  assert.ok(r.data.pdfUrl.includes(firstAssessmentId), 'filename must be keyed to the assessment id');
+  assert.equal(r.data.assessment.id, firstAssessmentId, 'must update the SPECIFIC assessment requested');
   assert.equal(r.data.assessment.pdf_url, r.data.pdfUrl);
+  assert.equal(modelServiceCallCount, callsBefore + 1, 'must call the model service, not generate locally');
   pdfUrl = new URL(r.data.pdfUrl);
+});
+
+await check('multiple assessments never collide — each keeps its own PDF', async () => {
+  const second = await api('POST', `/api/reports/${userId}/pdf`, {
+    token: userToken,
+    body: { analysis, assessmentId },
+  });
+  assert.equal(second.status, 201);
+  assert.equal(second.data.assessment.id, assessmentId);
+  assert.notEqual(second.data.pdfUrl, pdfUrl.href, 'second assessment must get its own PDF URL');
+
+  // Both assessments must retain their own distinct pdf_url afterward.
+  const user = await api('GET', `/api/users/${userId}`, { token: userToken });
+  const a1 = user.data.assessments.find((a) => a.id === firstAssessmentId);
+  const a2 = user.data.assessments.find((a) => a.id === assessmentId);
+  assert.equal(a1.pdf_url, pdfUrl.href);
+  assert.equal(a2.pdf_url, second.data.pdfUrl);
+});
+
+await check('assessmentId not owned by this user is rejected (404)', async () => {
+  await verifyEmailOtp('other.owner@example.com');
+  const other = await api('POST', '/api/auth/register', {
+    body: { name: 'Other Owner', email: 'other.owner@example.com' },
+  });
+  // A well-formed but unrelated ObjectId (not this user's assessment) must
+  // never resolve — otherwise one user could overwrite another's PDF.
+  const r = await api('POST', `/api/reports/${userId}/pdf`, {
+    token: userToken,
+    body: { analysis, assessmentId: other.data.user.id },
+  });
+  assert.equal(r.status, 404);
 });
 
 await check('GET public PDF URL streams the stored PDF', async () => {
@@ -368,7 +452,8 @@ await check('user cannot access another user (403)', async () => {
 await check('GET /api/admin/users lists users with assessments + credentials', async () => {
   const r = await api('GET', '/api/admin/users', { token: adminToken });
   assert.equal(r.status, 200);
-  assert.equal(r.data.length, 2);
+  // main test user + "Other" (403 test) + "Other Owner" (404 assessmentId test)
+  assert.equal(r.data.length, 3);
   const me = r.data.find((u) => u.id === userId);
   assert.ok(me.assessments.length >= 2);
   assert.ok(me.report_json, 'latest report mirrored onto user');
@@ -385,7 +470,7 @@ await check('GET /api/admin/users/:id returns detail', async () => {
 await check('GET /api/admin/stats aggregates correctly', async () => {
   const r = await api('GET', '/api/admin/stats', { token: adminToken });
   assert.equal(r.status, 200);
-  assert.equal(r.data.total_users, 2);
+  assert.equal(r.data.total_users, 3);
   assert.equal(r.data.paid_users, 1);
   assert.equal(r.data.mrr, 19);
   assert.ok(r.data.completed_assessments >= 2);
@@ -430,6 +515,7 @@ await check('DELETE /api/admin/users/:id cascades assessments', async () => {
 // ── Teardown ─────────────────────────────────────────────────────────────────
 
 server.close();
+modelService.close();
 await disconnectMongo();
 await mongod.stop();
 
