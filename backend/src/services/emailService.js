@@ -207,6 +207,37 @@ export const sendOtpEmail = ({ email, name, otp }) => {
   });
 };
 
+/** Password-reset verification code. */
+export const sendPasswordResetEmail = ({ email, name, otp }) => {
+  const firstName = (name || '').trim().split(/\s+/)[0] || 'there';
+  return send({
+    to: email,
+    subject: `${otp} is your Limitless password reset code`,
+    html: `
+    <div style="background:#F8FAFC;padding:24px 0">
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
+        <div style="background:#3B82F6;padding:28px 32px">
+          <h1 style="color:#FFFFFF;font-size:22px;margin:0">LIMITLESS</h1>
+          <p style="color:#DBEAFE;font-size:13px;margin:6px 0 0">Password Reset</p>
+        </div>
+        <div style="padding:28px 32px">
+          <h2 style="color:#0F172A;font-size:19px;margin:0 0 12px">Hi ${firstName},</h2>
+          <p style="color:#475569;font-size:14px;line-height:1.7;margin:0 0 20px">
+            Use this code to reset your Limitless account password:
+          </p>
+          <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:18px;text-align:center;margin:0 0 20px">
+            <span style="font-family:Consolas,monospace;font-size:34px;font-weight:bold;letter-spacing:10px;color:#0F172A">${otp}</span>
+          </div>
+          <p style="color:#94A3B8;font-size:13px;margin:0 0 8px">This code expires in <strong>10 minutes</strong>.</p>
+          <p style="color:#94A3B8;font-size:13px;margin:0">If you didn't request this, you can safely ignore this email — your password will not change.</p>
+          ${footerHtml}
+        </div>
+      </div>
+    </div>`,
+    text: `Hi ${firstName},\n\nYour Limitless password reset code is: ${otp}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email — your password will not change.\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}`,
+  });
+};
+
 /** Internal notification to the admin inbox on new registration. */
 export const sendAdminNotification = ({ name, email, age, gender }) => {
   if (!config.adminNotifyEmail) return Promise.resolve({ sent: false, reason: 'not_configured' });

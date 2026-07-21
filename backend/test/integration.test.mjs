@@ -211,6 +211,58 @@ await check('change-password clears temp password + reset flag', async () => {
   assert.equal(newLogin.status, 200);
 });
 
+await check('register with inline otp (merged verify+register) skips separate verify-otp call', async () => {
+  const email = 'inline.otp@example.com';
+  const sent = await api('POST', '/api/auth/send-otp', { body: { email } });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.devOtp);
+
+  const wrong = await api('POST', '/api/auth/register', {
+    body: { name: 'Inline Otp', email, otp: '000000' },
+  });
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.data.error, 'OTP invalid');
+
+  const r = await api('POST', '/api/auth/register', {
+    body: { name: 'Inline Otp', email, otp: sent.data.devOtp },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.data.user.email, email);
+  assert.ok(r.data.token);
+});
+
+await check('forgot-password → unknown email is 404', async () => {
+  const r = await api('POST', '/api/auth/forgot-password', { body: { email: 'nobody@example.com' } });
+  assert.equal(r.status, 404);
+});
+
+await check('forgot-password + reset-password sets a new password', async () => {
+  const sent = await api('POST', '/api/auth/forgot-password', { body: { email: 'test.user@example.com' } });
+  assert.equal(sent.status, 200);
+  assert.ok(sent.data.devOtp);
+
+  const badOtp = await api('POST', '/api/auth/reset-password', {
+    body: { email: 'test.user@example.com', otp: '000000', newPassword: 'ResetPass123' },
+  });
+  assert.equal(badOtp.status, 400);
+
+  const r = await api('POST', '/api/auth/reset-password', {
+    body: { email: 'test.user@example.com', otp: sent.data.devOtp, newPassword: 'ResetPass123' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.user.password_reset_required, false);
+
+  const oldLogin = await api('POST', '/api/auth/login', {
+    body: { email: 'test.user@example.com', password: 'NewPass123' },
+  });
+  assert.equal(oldLogin.status, 401, 'previous password must no longer work');
+
+  const newLogin = await api('POST', '/api/auth/login', {
+    body: { email: 'test.user@example.com', password: 'ResetPass123' },
+  });
+  assert.equal(newLogin.status, 200);
+});
+
 // ── Analyze with auto-persistence ────────────────────────────────────────────
 
 await check('POST /api/v1/analyze persists assessment when userId given', async () => {
@@ -488,8 +540,8 @@ await check('user cannot access another user (403)', async () => {
 await check('GET /api/admin/users lists users with assessments + credentials', async () => {
   const r = await api('GET', '/api/admin/users', { token: adminToken });
   assert.equal(r.status, 200);
-  // main test user + "Other" (403 test) + "Other Owner" (404 assessmentId test)
-  assert.equal(r.data.length, 3);
+  // main test user + "Inline Otp" (merged register test) + "Other" (403 test) + "Other Owner" (404 assessmentId test)
+  assert.equal(r.data.length, 4);
   const me = r.data.find((u) => u.id === userId);
   assert.ok(me.assessments.length >= 2);
   assert.ok(me.report_json, 'latest report mirrored onto user');
@@ -506,7 +558,7 @@ await check('GET /api/admin/users/:id returns detail', async () => {
 await check('GET /api/admin/stats aggregates correctly', async () => {
   const r = await api('GET', '/api/admin/stats', { token: adminToken });
   assert.equal(r.status, 200);
-  assert.equal(r.data.total_users, 3);
+  assert.equal(r.data.total_users, 4);
   assert.equal(r.data.paid_users, 1);
   assert.equal(r.data.mrr, 19);
   assert.ok(r.data.completed_assessments >= 2);
