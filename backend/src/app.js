@@ -42,12 +42,16 @@ app.use('/files', publicFilesRouter);
 app.use(express.json({ limit: '2mb' }));
 
 // Rate limits: generous general limit + tighter ones for expensive/abusable routes.
+// Skipped entirely in the automated test env — the in-process test suite fires far
+// more requests per minute than any real client, and isn't what these limits guard.
+const skipInTest = () => config.nodeEnv === 'test';
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
     limit: 120,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    skip: skipInTest,
     message: { error: 'Too many requests, please slow down.' },
   })
 );
@@ -56,6 +60,7 @@ const generationLimiter = rateLimit({
   limit: 30,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  skip: skipInTest,
   message: { error: 'Too many assessment requests. Please wait a few minutes and try again.' },
 });
 const authLimiter = rateLimit({
@@ -63,6 +68,7 @@ const authLimiter = rateLimit({
   limit: 25,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
+  skip: skipInTest,
   message: { error: 'Too many login attempts. Please wait a few minutes and try again.' },
 });
 
