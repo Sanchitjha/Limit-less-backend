@@ -1,0 +1,575 @@
+{
+  "info": {
+    "name": "Limitless Backend APIs",
+    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — 2 calls:\n1. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL). If SMTP is not configured on the server, the response includes `devOtp` for testing.\n2. POST /api/auth/register — include the `otp` field (the code from step 1) directly in this call. The backend verifies it internally and creates the account in one shot — no separate verify-otp call needed. NOTE: do NOT send a `password` field, it is not accepted. The backend generates an 8-character temp password itself and emails it + returns it as `tempPassword` in the response, along with a ready-to-use `token`.\n(A separate POST /api/auth/verify-otp endpoint still exists and both flows are supported — call it before register if you'd rather split verification into its own step, e.g. to show a distinct \"email verified\" UI state before showing the rest of the registration form.)\n\n3. Use `token` as `Authorization: Bearer <token>` for all subsequent user-scoped calls.\n4. POST /api/auth/login is for RETURNING users (email + the temp or user-set password).\n5. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://limitless-api.160-153-179-249.sslip.io", "type": "string" },
+    { "key": "modelUrl", "value": "https://limitless-model.160-153-179-249.sslip.io", "type": "string" },
+    { "key": "userToken", "value": "", "type": "string" },
+    { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "assessmentId", "value": "", "type": "string" },
+    { "key": "userEmail", "value": "ravik392320@gmail.com", "type": "string" },
+    { "key": "userOtp", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Backend Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "Also available at GET / and GET /api/v1/health. Returns { status, service, version, features: { database, ai, stripeWebhook, email }, timestamp }."
+          }
+        },
+        {
+          "name": "Model Service Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{modelUrl}}/health", "host": ["{{modelUrl}}"], "path": ["health"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "1. Send OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.devOtp) { pm.collectionVariables.set('userOtp', json.devOtp); }",
+                  "pm.test('status is 200', () => pm.response.code === 200);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"name\": \"Ravi Kumar\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/send-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "send-otp"] },
+            "description": "Emails a 6-digit code, valid 10 minutes. 60s cooldown between resends. 409 if the email is already a registered user.\n\nResponse: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp is only present when SMTP is NOT configured on the server AND it is not production (testing convenience). In production with SMTP configured, check the real inbox instead."
+          }
+        },
+        {
+          "name": "2. Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"otp\": \"{{userOtp}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/verify-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "verify-otp"] },
+            "description": "400 on wrong/expired code (each wrong attempt is counted). 429 after 5 wrong attempts (must request a fresh OTP). On success, opens a 30-minute window during which /api/auth/register will accept this email."
+          }
+        },
+        {
+          "name": "3. Register (2-step: send-otp then this)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "  console.log('Temp password (also emailed to the user):', json.tempPassword);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"otp\": \"{{userOtp}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
+            "description": "IMPORTANT: do NOT send a `password` field — it is not accepted. The backend GENERATES an 8-character temporary password itself, hashes it, emails it to the user (welcome email) and returns it once as `tempPassword` in this response.\n\nTWO valid ways to satisfy the email-verification requirement (pick one flow, not both):\n1. Call '2. Verify OTP' separately first, then call this WITHOUT the `otp` field.\n2. Skip '2. Verify OTP' entirely and just include the `otp` field (the code from send-otp/devOtp) directly in THIS call — the backend verifies it inline. This is the recommended 2-call flow for mobile: send-otp -> register(with otp).\n\nReturns 403 { error: 'Please verify your email with the OTP first.' } if neither path is satisfied, 400 { error: 'OTP invalid' } if the inline otp is wrong, 409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — no separate login call is needed right after registering."
+          }
+        },
+        {
+          "name": "4. Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"PASTE_TEMP_OR_USER_PASSWORD\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
+            "description": "For returning users. Matches against the temp password (plaintext, first login) or the user-set password (bcrypt hash, after change-password). 401 on any mismatch.\n\nSuccess: 200 { token, user, latestAssessment }."
+          }
+        },
+        {
+          "name": "5. Change Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"currentPassword\": \"PASTE_TEMP_PASSWORD\",\n  \"newPassword\": \"NewStrongPass123\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/change-password", "host": ["{{baseUrl}}"], "path": ["api", "auth", "change-password"] },
+            "description": "newPassword must be at least 6 characters. 401 if currentPassword doesn't match. On success clears the temp password and sets password_reset_required to false."
+          }
+        },
+        {
+          "name": "6. Forgot Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.devOtp) { pm.collectionVariables.set('userOtp', json.devOtp); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api", "auth", "forgot-password"] },
+            "description": "For an EXISTING registered user who forgot their password (different from send-otp, which is only for new/unregistered emails). 404 { error: 'No account found with this email address.' } if no account exists for this email.\n\nEmails a 6-digit reset code (10 min TTL, 60s resend cooldown). Response: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp only present when SMTP isn't configured and not production."
+          }
+        },
+        {
+          "name": "7. Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"otp\": \"{{userOtp}}\",\n  \"newPassword\": \"NewStrongPass123\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api", "auth", "reset-password"] },
+            "description": "Verifies the code from '6. Forgot Password' and sets a new password directly — no need to know the old one. newPassword must be at least 6 characters.\n\n400 { error: 'Code expired or not requested...' } or { error: 'OTP invalid' } (wrong attempts are counted, same as verify-otp). 429 after 5 wrong attempts. 404 if the account no longer exists. Success: 200 { success: true, user }."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get User + Assessments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "users", "{{userId}}"]
+            },
+            "description": "Auth: the user themself (their own userId) or an admin token. Returns the user profile plus assessments[] (newest first)."
+          }
+        },
+        {
+          "name": "Update User Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"age\": 29,\n  \"gender\": \"male\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/users/{{userId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "users", "{{userId}}"]
+            },
+            "description": "Accepts: name, email, age, gender. `payment_status` is ALSO accepted here but returns 403 { error: 'Only administrators can update payment status directly.' } unless the caller's token has role=admin — use the Admin > Update User Plan request instead for that."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assessments (storage)",
+      "item": [
+        {
+          "name": "Create Assessment Record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('assessmentId', pm.response.json().id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"report_json\": { \"summary\": \"placeholder — normally the JSON returned by the model service /api/v1/analyze call\" }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/assessments", "host": ["{{baseUrl}}"], "path": ["api", "assessments"] },
+            "description": "Stores an assessment result against a user. Auth: the user themself or an admin — 403 otherwise. 404 if user_id doesn't exist. `report_json` should be the analysis object returned by the model service's /api/v1/analyze endpoint. Returns 201 with the created assessment (id, user_id, report_json, pdf_url, created_at, updated_at)."
+          }
+        },
+        {
+          "name": "Update Assessment",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pdf_url\": \"https://limitless-api.160-153-179-249.sslip.io/files/pdf-reports/{{userId}}/example.pdf\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/assessments/{{assessmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "assessments", "{{assessmentId}}"]
+            },
+            "description": "Auth: the owning user or an admin. Accepts report_json and/or pdf_url."
+          }
+        }
+      ]
+    },
+    {
+      "name": "AI Model Service (separate service)",
+      "description": "Base URL: {{modelUrl}} — a DIFFERENT service from the Node backend. This is the only source of truth for question generation, scoring and PDF rendering. See {{modelUrl}}/docs (Swagger UI) or {{modelUrl}}/openapi.json for the fully authoritative schema — the bodies below are the confirmed shapes as of this collection's creation.",
+      "item": [
+        {
+          "name": "Generate Questions",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"locale\": \"en\"\n}"
+            },
+            "url": { "raw": "{{modelUrl}}/api/v1/generate-questions", "host": ["{{modelUrl}}"], "path": ["api", "v1", "generate-questions"] },
+            "description": "age required (10-120). Returns { assessmentId, sections, meta: { source, totalQuestions, scale } }."
+          }
+        },
+        {
+          "name": "Analyze Responses",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assessmentId\": \"paste-from-generate-questions\",\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"userId\": \"{{userId}}\",\n  \"responses\": [\n    { \"itemId\": \"example-item-1\", \"value\": 3 },\n    { \"itemId\": \"example-item-2\", \"value\": 4 }\n  ]\n}"
+            },
+            "url": { "raw": "{{modelUrl}}/api/v1/analyze", "host": ["{{modelUrl}}"], "path": ["api", "v1", "analyze"] },
+            "description": "responses: 1-500 items of { itemId, value }. Returns the scored analysis object — this is the `analysis` payload later sent to generate-pdf and to POST {{baseUrl}}/api/reports/:userId/pdf."
+          }
+        },
+        {
+          "name": "Generate Full PDF",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"analysis\": { \"...\": \"paste the object returned by /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
+            },
+            "url": { "raw": "{{modelUrl}}/api/v1/generate-pdf", "host": ["{{modelUrl}}"], "path": ["api", "v1", "generate-pdf"] },
+            "description": "Returns the raw PDF binary. In the mobile app flow, prefer calling {{baseUrl}}/api/reports/:userId/pdf instead — the Node backend calls this endpoint for you AND stores the result + saves the link on the assessment."
+          }
+        },
+        {
+          "name": "Generate Teaser PDF",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"analysis\": { \"...\": \"paste the object returned by /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
+            },
+            "url": { "raw": "{{modelUrl}}/api/v1/generate-teaser-pdf", "host": ["{{modelUrl}}"], "path": ["api", "v1", "generate-teaser-pdf"] },
+            "description": "Free/preview teaser report — no payment required (unlike the full report)."
+          }
+        },
+        {
+          "name": "Longitudinal Analysis",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"_note\": \"Confirm the exact request schema at {{modelUrl}}/openapi.json before using — likely takes multiple past `analysis` objects for a trend comparison across a user's assessment history.\"\n}"
+            },
+            "url": { "raw": "{{modelUrl}}/api/v1/longitudinal-analysis", "host": ["{{modelUrl}}"], "path": ["api", "v1", "longitudinal-analysis"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports & Files",
+      "item": [
+        {
+          "name": "Generate + Store Report PDF (recommended)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"analysis\": { \"...\": \"paste the object returned by {{modelUrl}}/api/v1/analyze\" },\n  \"assessmentId\": \"{{assessmentId}}\",\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" },\n  \"teaser\": false,\n  \"sendEmail\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/{{userId}}/pdf",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "{{userId}}", "pdf"]
+            },
+            "description": "ALWAYS pass assessmentId when the user has more than one assessment — PDFs are keyed per-assessment, not per-user, to avoid overwriting/collisions. Auth: the user themself or an admin.\n\nServer-side paywall: if teaser=false and the user's payment_status is not 'paid', returns 403. Set teaser=true for the free preview report (no payment check).\n\nThe backend proxies the PDF generation itself — it calls {{modelUrl}}/api/v1/generate-pdf (or generate-teaser-pdf) server-side, so you never call the model service directly for this in the app; you just pass it the `analysis` object.\n\nReturns 201 { pdfUrl, fileName, assessment }. pdfUrl is a public link — download it with the 'Download Stored PDF' request below (no auth needed)."
+          }
+        },
+        {
+          "name": "Download Stored PDF (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/files/pdf-reports/{{userId}}/example.pdf",
+              "host": ["{{baseUrl}}"],
+              "path": ["files", "pdf-reports", "{{userId}}", "example.pdf"]
+            },
+            "description": "Public — no auth header needed. Replace the filename with the `fileName` returned by the generate/store PDF call. Streams the PDF binary from GridFS; 404 if not found."
+          }
+        },
+        {
+          "name": "Upload/Store a PDF directly (advanced)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/pdf" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "file",
+              "file": {}
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/files/pdf-reports/{{userId}}?fileName=example.pdf",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "files", "pdf-reports", "{{userId}}"],
+              "query": [{ "key": "fileName", "value": "example.pdf" }]
+            },
+            "description": "Rarely needed directly by the mobile app — prefer 'Generate + Store Report PDF' above. Raw PDF body (application/pdf or application/octet-stream), max 15mb, must start with the %PDF- magic bytes. Auth: the user themself or an admin. Returns 201 { fileName, publicUrl }."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payments (Stripe)",
+      "item": [
+        {
+          "name": "Create Checkout Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{baseUrl}}/api/v1/payments/create-checkout-session", "host": ["{{baseUrl}}"], "path": ["api", "v1", "payments", "create-checkout-session"] },
+            "description": "Auth: logged-in user. Creates a Stripe Checkout Session for the $19 Premium Cognitive Wellness Report and returns { url } — open this URL in a browser/webview for the user to pay. Returns 501 if Stripe is not configured on the server.\n\nAfter payment, Stripe redirects to the success_url and ALSO fires the webhook below server-to-server, which is what actually marks the user as paid — the redirect alone does not grant access."
+          }
+        },
+        {
+          "name": "Stripe Webhook (server-to-server only — reference)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Stripe-Signature", "value": "t=...,v1=..." }
+            ],
+            "body": { "mode": "raw", "raw": "{ \"type\": \"checkout.session.completed\", \"data\": { \"object\": { \"client_reference_id\": \"...\", \"customer_email\": \"...\", \"payment_status\": \"paid\" } } }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/webhooks/stripe", "host": ["{{baseUrl}}"], "path": ["api", "v1", "webhooks", "stripe"] },
+            "description": "NOT called by the mobile app — this is Stripe's own server calling ours, with an HMAC signature only Stripe can produce. Included here purely for reference/documentation. Do not call this manually with a fake signature; it will be rejected (400)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Plans",
+      "item": [
+        {
+          "name": "Get Plans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/plans", "host": ["{{baseUrl}}"], "path": ["api", "plans"] },
+            "description": "Public. Returns active plans sorted by price ascending."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Enquiries",
+      "item": [
+        {
+          "name": "Submit Enquiry",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"message\": \"I have a question about my report.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/enquiries", "host": ["{{baseUrl}}"], "path": ["api", "enquiries"] },
+            "description": "Public contact/feedback form. Fires an admin email notification (best-effort)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Admin Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  pm.collectionVariables.set('adminToken', pm.response.json().token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"PASTE_ADMIN_PASSWORD\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/admin/login", "host": ["{{baseUrl}}"], "path": ["api", "admin", "login"] },
+            "description": "Rate-limited to 15 attempts / 5 min. Returns { token, role: 'admin' } — token expires in 12h. Not needed by the mobile app itself, included for completeness / admin-panel reference."
+          }
+        },
+        {
+          "name": "Get All Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users", "host": ["{{baseUrl}}"], "path": ["api", "admin", "users"] },
+            "description": "All users, newest first, each with assessments[], temp_password, and mirrored report_json/pdf_url from the latest assessment."
+          }
+        },
+        {
+          "name": "Get Single User",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "users", "{{userId}}"] }
+          }
+        },
+        {
+          "name": "Update User Plan",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payment_status\": \"paid\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}/plan", "host": ["{{baseUrl}}"], "path": ["api", "admin", "users", "{{userId}}", "plan"] },
+            "description": "payment_status must be one of: pending, paid, demo, free, trial, suspended. Returns { success: true, user }."
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/users/{{userId}}", "host": ["{{baseUrl}}"], "path": ["api", "admin", "users", "{{userId}}"] },
+            "description": "Cascades: deletes the user's assessments AND their stored PDF files in GridFS."
+          }
+        },
+        {
+          "name": "Get Enquiries",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/enquiries", "host": ["{{baseUrl}}"], "path": ["api", "admin", "enquiries"] }
+          }
+        },
+        {
+          "name": "Delete Enquiry",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/enquiries/:id", "host": ["{{baseUrl}}"], "path": ["api", "admin", "enquiries", ":id"], "variable": [{ "key": "id", "value": "" }] }
+          }
+        },
+        {
+          "name": "Get Stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/admin/stats", "host": ["{{baseUrl}}"], "path": ["api", "admin", "stats"] },
+            "description": "Returns { total_users, paid_users, pending_users, demo_users, free_users, suspended_users, completed_assessments, users_with_report, new_users_24h, mrr, conversion_rate }."
+          }
+        }
+      ]
+    }
+  ]
+}
