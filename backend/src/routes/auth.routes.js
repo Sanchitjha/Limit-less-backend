@@ -11,6 +11,7 @@ import {
   sendCredentialsEmail,
   sendAdminNotification,
   sendOtpEmail,
+  sendPasswordResetEmail,
 } from '../services/emailService.js';
 
 const router = Router();
@@ -130,11 +131,15 @@ const passwordMatches = async (user, password) => {
 /**
  * POST /api/auth/register
  * Body: { name, email, age?, gender?, paymentStatus?: 'pending'|'demo',
- *         passwordResetRequired?: boolean }
+ *         passwordResetRequired?: boolean, otp? }
  * Creates the user with a generated temporary password (shown once) and
  * returns a JWT. Sends credentials + admin-notification emails when SMTP
  * is configured (best-effort). The demo flow registers with
  * paymentStatus:'demo' and passwordResetRequired:false.
+ *
+ * Email verification: either call /verify-otp first (as a separate step),
+ * OR pass the `otp` field here directly to verify and register in one call
+ * — both are checked against the same OTP record, so either flow works.
  */
 router.post('/register', async (req, res) => {
   const body = req.body || {};
@@ -145,6 +150,7 @@ router.post('/register', async (req, res) => {
     ? asInt(body.age, 'age', { min: 10, max: 120 })
     : null;
   const gender = asString(body.gender, 'gender', { required: false, maxLength: 30 }) || null;
+  const otpInput = asString(body.otp, 'otp', { required: false, maxLength: 10 }).trim();
   // Self-registration may only create free/demo accounts — never 'paid'.
   const paymentStatus = body.paymentStatus === 'demo' ? 'demo' : 'pending';
   const passwordResetRequired = body.passwordResetRequired === false ? false : true;
@@ -156,9 +162,23 @@ router.post('/register', async (req, res) => {
 
   // Email must be verified with an OTP first (disable with OTP_REQUIRED=false)
   if (config.otpRequired) {
-    const otpRecord = await Otp.findOne({ email, verified: true, expires_at: { $gt: new Date() } });
-    if (!otpRecord) {
+    const otpRecord = await Otp.findOne({ email });
+    if (!otpRecord || otpRecord.expires_at < new Date()) {
       return res.status(403).json({ error: 'Please verify your email with the OTP first.' });
+    }
+    if (!otpRecord.verified) {
+      // Not verified via a separate /verify-otp call — allow verifying inline here.
+      if (!otpInput) {
+        return res.status(403).json({ error: 'Please verify your email with the OTP first.' });
+      }
+      if (otpRecord.attempts >= OTP_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
+      }
+      if (hashOtp(email, otpInput) !== otpRecord.otp_hash) {
+        otpRecord.attempts += 1;
+        await otpRecord.save();
+        return res.status(400).json({ error: 'OTP invalid' });
+      }
     }
   }
 
@@ -237,6 +257,100 @@ router.post('/change-password', async (req, res) => {
   user.temp_password = null;
   user.password_reset_required = false;
   await user.save();
+
+  res.json({ success: true, user: sanitizeUser(user) });
+});
+
+/**
+ * POST /api/auth/forgot-password
+ * Body: { email }
+ * Emails a 6-digit reset code (10 min validity, 60s resend cooldown) to an
+ * EXISTING registered user. 404 if no account exists for that email.
+ */
+router.post('/forgot-password', async (req, res) => {
+  const body = req.body || {};
+  const email = asString(body.email, 'email', { required: true, maxLength: 320 }).toLowerCase();
+  assert(EMAIL_RE.test(email), 'email must be a valid email address', ['email']);
+
+  const user = await User.findOne({ email }).lean();
+  if (!user) {
+    return res.status(404).json({ error: 'No account found with this email address.' });
+  }
+
+  const existing = await Otp.findOne({ email });
+  if (existing && Date.now() - existing.last_sent_at.getTime() < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+    return res.status(429).json({ error: 'Please wait a minute before requesting another code.' });
+  }
+
+  const otp = String(crypto.randomInt(100000, 1000000));
+
+  await Otp.findOneAndUpdate(
+    { email },
+    {
+      email,
+      otp_hash: hashOtp(email, otp),
+      attempts: 0,
+      verified: false,
+      expires_at: new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000),
+      last_sent_at: new Date(),
+    },
+    { upsert: true, new: true }
+  );
+
+  if (features.email) {
+    const result = await sendPasswordResetEmail({ email, name: user.name, otp });
+    if (!result.sent) {
+      return res.status(502).json({ error: 'Could not send the reset code email. Please try again.' });
+    }
+  } else if (config.nodeEnv === 'production') {
+    return res.status(503).json({ error: 'Email service is not configured on the server.' });
+  }
+
+  res.json({
+    sent: true,
+    expiresInMinutes: OTP_TTL_MINUTES,
+    // Testing convenience only — never present when SMTP is configured or in production
+    ...(!features.email && config.nodeEnv !== 'production' ? { devOtp: otp } : {}),
+  });
+});
+
+/**
+ * POST /api/auth/reset-password
+ * Body: { email, otp, newPassword }
+ * Verifies the reset code (from /forgot-password) and sets a new password
+ * directly — no need to know the old one. Max 5 wrong attempts per code.
+ */
+router.post('/reset-password', async (req, res) => {
+  const body = req.body || {};
+  const email = asString(body.email, 'email', { required: true, maxLength: 320 }).toLowerCase();
+  const otp = asString(body.otp, 'otp', { required: true, maxLength: 10 }).trim();
+  const newPassword = asString(body.newPassword, 'newPassword', { required: true, maxLength: 200 });
+  assert(newPassword.length >= 6, 'newPassword must be at least 6 characters', ['newPassword']);
+
+  const record = await Otp.findOne({ email });
+  if (!record || record.expires_at < new Date()) {
+    return res.status(400).json({ error: 'Code expired or not requested. Please request a new code.' });
+  }
+  if (record.attempts >= OTP_MAX_ATTEMPTS) {
+    return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
+  }
+  if (hashOtp(email, otp) !== record.otp_hash) {
+    record.attempts += 1;
+    await record.save();
+    return res.status(400).json({ error: 'OTP invalid' });
+  }
+
+  const user = await User.findOne({ email });
+  if (!user) {
+    return res.status(404).json({ error: 'No account found with this email address.' });
+  }
+
+  user.password_hash = await bcrypt.hash(newPassword, 10);
+  user.temp_password = null;
+  user.password_reset_required = false;
+  await user.save();
+
+  Otp.deleteOne({ email }).catch(() => {});
 
   res.json({ success: true, user: sanitizeUser(user) });
 });
