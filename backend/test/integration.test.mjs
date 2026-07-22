@@ -109,7 +109,7 @@ await check('POST /api/v1/generate-questions', async () => {
 
 // ── Auth flow ────────────────────────────────────────────────────────────────
 
-/** Complete the OTP verification for an email (uses devOtp from the response). */
+/** Send + verify an OTP for an email (uses devOtp from the response). */
 const verifyEmailOtp = async (email) => {
   const sent = await api('POST', '/api/auth/send-otp', { body: { email } });
   assert.equal(sent.status, 200);
@@ -121,37 +121,7 @@ const verifyEmailOtp = async (email) => {
   return sent.data.devOtp;
 };
 
-await check('register without OTP verification → 403', async () => {
-  const r = await api('POST', '/api/auth/register', {
-    body: { name: 'No Otp', email: 'no.otp@example.com' },
-  });
-  assert.equal(r.status, 403);
-});
-
-await check('send-otp + wrong code → 400, correct code verifies', async () => {
-  const sent = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
-  assert.equal(sent.status, 200);
-  assert.ok(sent.data.devOtp);
-
-  const bad = await api('POST', '/api/auth/verify-otp', {
-    body: { email: 'test.user@example.com', otp: '000000' },
-  });
-  assert.equal(bad.status, 400);
-  assert.equal(bad.data.error, 'OTP invalid');
-
-  const good = await api('POST', '/api/auth/verify-otp', {
-    body: { email: 'test.user@example.com', otp: sent.data.devOtp },
-  });
-  assert.equal(good.status, 200);
-  assert.equal(good.data.verified, true);
-});
-
-await check('send-otp resend within cooldown → 429', async () => {
-  const r = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
-  assert.equal(r.status, 429);
-});
-
-await check('POST /api/auth/register creates user + returns temp password & JWT', async () => {
+await check('POST /api/auth/register creates the account immediately (no OTP needed first)', async () => {
   const r = await api('POST', '/api/auth/register', {
     body: { name: 'Test User', email: 'Test.User@Example.com', age: 25, gender: 'male' },
   });
@@ -159,6 +129,7 @@ await check('POST /api/auth/register creates user + returns temp password & JWT'
   assert.equal(r.data.user.email, 'test.user@example.com'); // lowercased
   assert.equal(r.data.user.payment_status, 'pending');
   assert.equal(r.data.user.password_reset_required, true);
+  assert.equal(r.data.user.email_verified, false, 'not verified until send-otp + verify-otp run afterward');
   assert.ok(r.data.tempPassword.length >= 8);
   assert.ok(r.data.token);
   userToken = r.data.token;
@@ -211,24 +182,39 @@ await check('change-password clears temp password + reset flag', async () => {
   assert.equal(newLogin.status, 200);
 });
 
-await check('register with inline otp (merged verify+register) skips separate verify-otp call', async () => {
-  const email = 'inline.otp@example.com';
-  const sent = await api('POST', '/api/auth/send-otp', { body: { email } });
+await check('post-registration: send-otp + wrong code → 400, correct code verifies the account', async () => {
+  const sent = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
   assert.equal(sent.status, 200);
   assert.ok(sent.data.devOtp);
 
-  const wrong = await api('POST', '/api/auth/register', {
-    body: { name: 'Inline Otp', email, otp: '000000' },
+  const bad = await api('POST', '/api/auth/verify-otp', {
+    body: { email: 'test.user@example.com', otp: '000000' },
   });
-  assert.equal(wrong.status, 400);
-  assert.equal(wrong.data.error, 'OTP invalid');
+  assert.equal(bad.status, 400);
+  assert.equal(bad.data.error, 'OTP invalid');
 
-  const r = await api('POST', '/api/auth/register', {
-    body: { name: 'Inline Otp', email, otp: sent.data.devOtp },
+  const good = await api('POST', '/api/auth/verify-otp', {
+    body: { email: 'test.user@example.com', otp: sent.data.devOtp },
   });
-  assert.equal(r.status, 201);
-  assert.equal(r.data.user.email, email);
-  assert.ok(r.data.token);
+  assert.equal(good.status, 200);
+  assert.equal(good.data.verified, true);
+  assert.equal(good.data.emailVerified, true, 'the user record should now be flagged verified');
+
+  const profile = await api('GET', `/api/users/${userId}`, { token: userToken });
+  assert.equal(profile.data.email_verified, true);
+});
+
+await check('send-otp resend within cooldown → 429', async () => {
+  await api('POST', '/api/auth/register', { body: { name: 'Cooldown', email: 'cooldown@example.com' } });
+  await api('POST', '/api/auth/send-otp', { body: { email: 'cooldown@example.com' } });
+  const r = await api('POST', '/api/auth/send-otp', { body: { email: 'cooldown@example.com' } });
+  assert.equal(r.status, 429);
+});
+
+await check('send-otp for an already-verified email → 409', async () => {
+  const r = await api('POST', '/api/auth/send-otp', { body: { email: 'test.user@example.com' } });
+  assert.equal(r.status, 409);
+  assert.equal(r.data.error, 'This email is already verified. Please log in instead.');
 });
 
 await check('forgot-password → unknown email is 404', async () => {
@@ -261,6 +247,28 @@ await check('forgot-password + reset-password sets a new password', async () => 
     body: { email: 'test.user@example.com', password: 'ResetPass123' },
   });
   assert.equal(newLogin.status, 200);
+});
+
+await check('logout revokes the token — further requests with it are rejected', async () => {
+  const loginRes = await api('POST', '/api/auth/login', {
+    body: { email: 'test.user@example.com', password: 'ResetPass123' },
+  });
+  assert.equal(loginRes.status, 200);
+  const disposableToken = loginRes.data.token;
+
+  const before = await api('GET', `/api/users/${userId}`, { token: disposableToken });
+  assert.equal(before.status, 200);
+
+  const out = await api('POST', '/api/auth/logout', { token: disposableToken });
+  assert.equal(out.status, 200);
+  assert.equal(out.data.success, true);
+
+  const after = await api('GET', `/api/users/${userId}`, { token: disposableToken });
+  assert.equal(after.status, 401);
+
+  // The main userToken used by the rest of the suite (a separate login) is untouched.
+  const stillWorks = await api('GET', `/api/users/${userId}`, { token: userToken });
+  assert.equal(stillWorks.status, 200);
 });
 
 // ── Analyze with auto-persistence ────────────────────────────────────────────
