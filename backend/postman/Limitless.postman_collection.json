@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Limitless Backend APIs",
-    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — 2 calls:\n1. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL). If SMTP is not configured on the server, the response includes `devOtp` for testing.\n2. POST /api/auth/register — include the `otp` field (the code from step 1) directly in this call. The backend verifies it internally and creates the account in one shot — no separate verify-otp call needed. NOTE: do NOT send a `password` field, it is not accepted. The backend generates an 8-character temp password itself and emails it + returns it as `tempPassword` in the response, along with a ready-to-use `token`.\n(A separate POST /api/auth/verify-otp endpoint still exists and both flows are supported — call it before register if you'd rather split verification into its own step, e.g. to show a distinct \"email verified\" UI state before showing the rest of the registration form.)\n\n3. Use `token` as `Authorization: Bearer <token>` for all subsequent user-scoped calls.\n4. POST /api/auth/login is for RETURNING users (email + the temp or user-set password).\n5. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
+    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — REGISTER COMES FIRST, OTP comes after:\n1. POST /api/auth/register — just name/email/age/gender. NO `password` field (not accepted) and NO `otp` field needed. The account is created immediately. The backend generates an 8-character temp password itself and emails it + returns it as `tempPassword`, along with a ready-to-use `token`. The new user starts with email_verified:false.\n2. Use `token` as `Authorization: Bearer <token>` right away for the rest of the app — verification is NOT a gate on login/using the app.\n3. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL) to that same email. If SMTP is not configured on the server, the response includes `devOtp` for testing.\n4. POST /api/auth/verify-otp — flips email_verified to true on the account.\n5. POST /api/auth/login is for RETURNING users (email + the temp or user-set password).\n6. POST /api/auth/logout (Bearer token) actually revokes that token server-side — call it when the user signs out.\n7. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -41,46 +41,7 @@
       "name": "Auth",
       "item": [
         {
-          "name": "1. Send OTP",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "const json = pm.response.json();",
-                  "if (json.devOtp) { pm.collectionVariables.set('userOtp', json.devOtp); }",
-                  "pm.test('status is 200', () => pm.response.code === 200);"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"name\": \"Ravi Kumar\"\n}"
-            },
-            "url": { "raw": "{{baseUrl}}/api/auth/send-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "send-otp"] },
-            "description": "Emails a 6-digit code, valid 10 minutes. 60s cooldown between resends. 409 if the email is already a registered user.\n\nResponse: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp is only present when SMTP is NOT configured on the server AND it is not production (testing convenience). In production with SMTP configured, check the real inbox instead."
-          }
-        },
-        {
-          "name": "2. Verify OTP",
-          "request": {
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"otp\": \"{{userOtp}}\"\n}"
-            },
-            "url": { "raw": "{{baseUrl}}/api/auth/verify-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "verify-otp"] },
-            "description": "400 on wrong/expired code (each wrong attempt is counted). 429 after 5 wrong attempts (must request a fresh OTP). On success, opens a 30-minute window during which /api/auth/register will accept this email."
-          }
-        },
-        {
-          "name": "3. Register (2-step: send-otp then this)",
+          "name": "1. Register (no password, no otp)",
           "event": [
             {
               "listen": "test",
@@ -102,10 +63,48 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"otp\": \"{{userOtp}}\"\n}"
+              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
-            "description": "IMPORTANT: do NOT send a `password` field — it is not accepted. The backend GENERATES an 8-character temporary password itself, hashes it, emails it to the user (welcome email) and returns it once as `tempPassword` in this response.\n\nTWO valid ways to satisfy the email-verification requirement (pick one flow, not both):\n1. Call '2. Verify OTP' separately first, then call this WITHOUT the `otp` field.\n2. Skip '2. Verify OTP' entirely and just include the `otp` field (the code from send-otp/devOtp) directly in THIS call — the backend verifies it inline. This is the recommended 2-call flow for mobile: send-otp -> register(with otp).\n\nReturns 403 { error: 'Please verify your email with the OTP first.' } if neither path is satisfied, 400 { error: 'OTP invalid' } if the inline otp is wrong, 409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — no separate login call is needed right after registering."
+            "description": "The FIRST call for a new user — no OTP needed before this. IMPORTANT: do NOT send a `password` field, it is not accepted. The backend GENERATES an 8-character temporary password itself, hashes it, emails it to the user (welcome email) and returns it once as `tempPassword` in this response.\n\n409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — start using it immediately, e.g. Authorization: Bearer {{userToken}}. `user.email_verified` is false at this point; use '2. Send OTP' + '3. Verify OTP' below to verify the email AFTER registering (verification does not block login or app usage)."
+          }
+        },
+        {
+          "name": "2. Send OTP (after registering)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.devOtp) { pm.collectionVariables.set('userOtp', json.devOtp); }"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"name\": \"Ravi Kumar\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/send-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "send-otp"] },
+            "description": "Call this AFTER '1. Register' to verify the email on an already-created account. Emails a 6-digit code, valid 10 minutes. 60s cooldown between resends. 409 only if this email's account is ALREADY verified (nothing left to do — log in instead).\n\nResponse: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp is only present when SMTP is NOT configured on the server AND it is not production (testing convenience). In production with SMTP configured, check the real inbox instead."
+          }
+        },
+        {
+          "name": "3. Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"otp\": \"{{userOtp}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/verify-otp", "host": ["{{baseUrl}}"], "path": ["api", "auth", "verify-otp"] },
+            "description": "400 on wrong/expired code (each wrong attempt is counted). 429 after 5 wrong attempts (must request a fresh OTP via '2. Send OTP'). On success, flips `email_verified` to true on the matching user account (if one exists for this email) — this is what actually marks the account verified. Response: { verified: true, emailVerified: true }."
           }
         },
         {
@@ -137,7 +136,16 @@
           }
         },
         {
-          "name": "5. Change Password",
+          "name": "5. Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "auth", "logout"] },
+            "description": "Actually revokes THIS token server-side (not just a client-side 'forget it') — any further request using the same token gets 401 immediately, even though it hasn't naturally expired yet (tokens last 7 days otherwise). Call this on the app's sign-out action, then discard the token locally too.\n\nSuccess: 200 { success: true, message }."
+          }
+        },
+        {
+          "name": "6. Change Password",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -150,7 +158,7 @@
           }
         },
         {
-          "name": "6. Forgot Password",
+          "name": "7. Forgot Password",
           "event": [
             {
               "listen": "test",
@@ -171,11 +179,11 @@
               "raw": "{\n  \"email\": \"{{userEmail}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api", "auth", "forgot-password"] },
-            "description": "For an EXISTING registered user who forgot their password (different from send-otp, which is only for new/unregistered emails). 404 { error: 'No account found with this email address.' } if no account exists for this email.\n\nEmails a 6-digit reset code (10 min TTL, 60s resend cooldown). Response: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp only present when SMTP isn't configured and not production."
+            "description": "For an EXISTING registered user who forgot their password (different purpose from '2. Send OTP', which verifies email ownership — this is specifically for a password reset code). 404 { error: 'No account found with this email address.' } if no account exists for this email.\n\nEmails a 6-digit reset code (10 min TTL, 60s resend cooldown). Response: { sent: true, expiresInMinutes: 10, devOtp? } — devOtp only present when SMTP isn't configured and not production."
           }
         },
         {
-          "name": "7. Reset Password",
+          "name": "8. Reset Password",
           "request": {
             "method": "POST",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -184,7 +192,7 @@
               "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"otp\": \"{{userOtp}}\",\n  \"newPassword\": \"NewStrongPass123\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api", "auth", "reset-password"] },
-            "description": "Verifies the code from '6. Forgot Password' and sets a new password directly — no need to know the old one. newPassword must be at least 6 characters.\n\n400 { error: 'Code expired or not requested...' } or { error: 'OTP invalid' } (wrong attempts are counted, same as verify-otp). 429 after 5 wrong attempts. 404 if the account no longer exists. Success: 200 { success: true, user }."
+            "description": "Verifies the code from '7. Forgot Password' and sets a new password directly — no need to know the old one. newPassword must be at least 6 characters.\n\n400 { error: 'Code expired or not requested...' } or { error: 'OTP invalid' } (wrong attempts are counted, same as verify-otp). 429 after 5 wrong attempts. 404 if the account no longer exists. Success: 200 { success: true, user }."
           }
         }
       ]
@@ -202,7 +210,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "users", "{{userId}}"]
             },
-            "description": "Auth: the user themself (their own userId) or an admin token. Returns the user profile plus assessments[] (newest first)."
+            "description": "Auth: the user themself (their own userId) or an admin token. Returns the user profile (includes `email_verified: boolean`, flipped by '3. Verify OTP') plus assessments[] (newest first)."
           }
         },
         {
