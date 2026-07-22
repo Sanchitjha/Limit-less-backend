@@ -1,14 +1,16 @@
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { isDbReady } from '../db/mongo.js';
+import { RevokedToken } from '../db/models/RevokedToken.js';
 
 export const signUserToken = (userId) =>
-  jwt.sign({ sub: String(userId), role: 'user' }, config.jwtSecret, {
+  jwt.sign({ sub: String(userId), role: 'user', jti: crypto.randomUUID() }, config.jwtSecret, {
     expiresIn: config.jwtExpiresIn,
   });
 
 export const signAdminToken = () =>
-  jwt.sign({ sub: 'admin', role: 'admin' }, config.jwtSecret, { expiresIn: '12h' });
+  jwt.sign({ sub: 'admin', role: 'admin', jti: crypto.randomUUID() }, config.jwtSecret, { expiresIn: '12h' });
 
 /** 503 guard for routes that need MongoDB. */
 export const requireDb = (req, res, next) => {
@@ -28,18 +30,31 @@ const readToken = (req) => {
 };
 
 /** Requires a valid user or admin JWT. Attaches req.auth = { userId, role }. */
-export const requireAuth = (req, res, next) => {
+export const requireAuth = async (req, res, next) => {
   const token = readToken(req);
   if (!token) {
     return res.status(401).json({ error: 'Missing Authorization header (Bearer token)' });
   }
+  let payload;
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
-    req.auth = { userId: payload.sub, role: payload.role === 'admin' ? 'admin' : 'user' };
-    next();
+    payload = jwt.verify(token, config.jwtSecret);
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+
+  try {
+    if (payload.jti && isDbReady()) {
+      const revoked = await RevokedToken.findOne({ jti: payload.jti }).lean();
+      if (revoked) {
+        return res.status(401).json({ error: 'This token has been logged out. Please log in again.' });
+      }
+    }
+  } catch (err) {
+    console.warn('[auth] revocation check failed, allowing request:', err.message);
+  }
+
+  req.auth = { userId: payload.sub, role: payload.role === 'admin' ? 'admin' : 'user' };
+  next();
 };
 
 /** Requires an admin JWT. */
