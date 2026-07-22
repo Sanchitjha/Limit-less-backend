@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
 import { config, features } from '../config.js';
 import { User, sanitizeUser } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
 import { Otp } from '../db/models/Otp.js';
-import { requireDb, signUserToken } from '../middleware/auth.js';
+import { RevokedToken } from '../db/models/RevokedToken.js';
+import { requireDb, requireAuth, signUserToken } from '../middleware/auth.js';
 import { assert, asInt, asString } from '../middleware/validate.js';
 import {
   sendCredentialsEmail,
@@ -36,8 +38,9 @@ const hashOtp = (email, otp) =>
  * POST /api/auth/send-otp
  * Body: { email, name? }
  * Emails a 6-digit verification code (10 min validity, 60s resend cooldown).
- * 409 if the email is already registered. In non-production environments
- * WITHOUT SMTP configured, the code is returned as `devOtp` for testing.
+ * Used to verify a user's email AFTER registration (register first, then
+ * send-otp + verify-otp) — 409 only if that email is already a VERIFIED
+ * account (nothing left to verify; log in instead).
  */
 router.post('/send-otp', async (req, res) => {
   const body = req.body || {};
@@ -46,8 +49,8 @@ router.post('/send-otp', async (req, res) => {
   const name = asString(body.name, 'name', { required: false, maxLength: 200 });
 
   const existingUser = await User.findOne({ email }).lean();
-  if (existingUser) {
-    return res.status(409).json({ error: 'This email is already registered. Please log in instead.' });
+  if (existingUser?.email_verified) {
+    return res.status(409).json({ error: 'This email is already verified. Please log in instead.' });
   }
 
   const existing = await Otp.findOne({ email });
@@ -92,7 +95,8 @@ router.post('/send-otp', async (req, res) => {
 /**
  * POST /api/auth/verify-otp
  * Body: { email, otp }
- * Marks the email as verified (valid for 30 minutes to complete registration).
+ * Verifies the code. If a registered user exists for this email, marks
+ * their account `email_verified: true` (the normal post-registration case).
  * Max 5 wrong attempts per code.
  */
 router.post('/verify-otp', async (req, res) => {
@@ -118,7 +122,10 @@ router.post('/verify-otp', async (req, res) => {
   record.expires_at = new Date(Date.now() + OTP_VERIFIED_TTL_MINUTES * 60 * 1000);
   await record.save();
 
-  res.json({ verified: true });
+  const user = await User.findOneAndUpdate({ email }, { email_verified: true }, { new: true });
+  Otp.deleteOne({ email }).catch(() => {});
+
+  res.json({ verified: true, emailVerified: Boolean(user) });
 });
 
 /** Match either the plaintext temp password or the bcrypt hash. */
@@ -131,15 +138,16 @@ const passwordMatches = async (user, password) => {
 /**
  * POST /api/auth/register
  * Body: { name, email, age?, gender?, paymentStatus?: 'pending'|'demo',
- *         passwordResetRequired?: boolean, otp? }
- * Creates the user with a generated temporary password (shown once) and
- * returns a JWT. Sends credentials + admin-notification emails when SMTP
- * is configured (best-effort). The demo flow registers with
- * paymentStatus:'demo' and passwordResetRequired:false.
+ *         passwordResetRequired?: boolean }
+ * Creates the account immediately — no OTP needed beforehand and no
+ * `password` field accepted. Generates a temporary password (shown once)
+ * and returns a ready-to-use JWT right away. Sends credentials +
+ * admin-notification emails when SMTP is configured (best-effort).
  *
- * Email verification: either call /verify-otp first (as a separate step),
- * OR pass the `otp` field here directly to verify and register in one call
- * — both are checked against the same OTP record, so either flow works.
+ * Email verification happens AFTER this call: the new user starts with
+ * email_verified:false — call /send-otp then /verify-otp with the same
+ * email to verify it. Verification does not block login or this response;
+ * it only flips the `email_verified` flag on the user.
  */
 router.post('/register', async (req, res) => {
   const body = req.body || {};
@@ -150,7 +158,6 @@ router.post('/register', async (req, res) => {
     ? asInt(body.age, 'age', { min: 10, max: 120 })
     : null;
   const gender = asString(body.gender, 'gender', { required: false, maxLength: 30 }) || null;
-  const otpInput = asString(body.otp, 'otp', { required: false, maxLength: 10 }).trim();
   // Self-registration may only create free/demo accounts — never 'paid'.
   const paymentStatus = body.paymentStatus === 'demo' ? 'demo' : 'pending';
   const passwordResetRequired = body.passwordResetRequired === false ? false : true;
@@ -158,28 +165,6 @@ router.post('/register', async (req, res) => {
   const existing = await User.findOne({ email }).lean();
   if (existing) {
     return res.status(409).json({ error: 'This email is already registered. Please log in instead.' });
-  }
-
-  // Email must be verified with an OTP first (disable with OTP_REQUIRED=false)
-  if (config.otpRequired) {
-    const otpRecord = await Otp.findOne({ email });
-    if (!otpRecord || otpRecord.expires_at < new Date()) {
-      return res.status(403).json({ error: 'Please verify your email with the OTP first.' });
-    }
-    if (!otpRecord.verified) {
-      // Not verified via a separate /verify-otp call — allow verifying inline here.
-      if (!otpInput) {
-        return res.status(403).json({ error: 'Please verify your email with the OTP first.' });
-      }
-      if (otpRecord.attempts >= OTP_MAX_ATTEMPTS) {
-        return res.status(429).json({ error: 'Too many wrong attempts. Please request a new code.' });
-      }
-      if (hashOtp(email, otpInput) !== otpRecord.otp_hash) {
-        otpRecord.attempts += 1;
-        await otpRecord.save();
-        return res.status(400).json({ error: 'OTP invalid' });
-      }
-    }
   }
 
   const tempPassword = generateTempPassword();
@@ -194,10 +179,8 @@ router.post('/register', async (req, res) => {
     payment_status: paymentStatus,
     age,
     gender,
+    email_verified: false,
   });
-
-  // Consume the OTP so it can't be reused
-  Otp.deleteOne({ email }).catch(() => {});
 
   // Best-effort emails — never block or fail registration.
   sendCredentialsEmail({ name, email, tempPassword, paymentStatus: user.payment_status }).catch(() => {});
@@ -233,6 +216,26 @@ router.post('/login', async (req, res) => {
     user: sanitizeUser(user),
     latestAssessment: latest ? sanitizeAssessment(latest) : null,
   });
+});
+
+/**
+ * POST /api/auth/logout
+ * Auth: Bearer token (the one being logged out).
+ * Actually invalidates this JWT server-side (adds its jti to a revocation
+ * list until it would have expired anyway) — not just a client-side
+ * "forget the token" no-op. Any further request with this same token gets
+ * 401 immediately, even though it hasn't naturally expired yet.
+ */
+router.post('/logout', requireAuth, async (req, res) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+  const decoded = token ? jwt.decode(token) : null;
+
+  if (decoded?.jti && decoded?.exp) {
+    await RevokedToken.create({ jti: decoded.jti, expires_at: new Date(decoded.exp * 1000) }).catch(() => {});
+  }
+
+  res.json({ success: true, message: 'Logged out. This token is no longer valid.' });
 });
 
 /**
