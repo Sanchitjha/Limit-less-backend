@@ -45,8 +45,6 @@ export const config = {
   // Auth
   jwtSecret,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  // Require email OTP verification before registration (set OTP_REQUIRED=false to disable)
-  otpRequired: process.env.OTP_REQUIRED !== 'false',
   adminUsername: process.env.ADMIN_USERNAME || 'admin',
   adminEmail: (process.env.ADMIN_EMAIL || 'admin@limitlessworld.net').toLowerCase(),
   adminPassword: process.env.ADMIN_PASSWORD || 'limitlessadmin',
