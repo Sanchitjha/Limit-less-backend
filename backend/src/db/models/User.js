@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema(
     temp_password: { type: String, default: null },
     password_hash: { type: String, default: null },
     password_reset_required: { type: Boolean, default: true },
+    email_verified: { type: Boolean, default: false },
     payment_status: {
       type: String,
       enum: PAYMENT_STATUSES,
@@ -44,6 +45,7 @@ export function sanitizeUser(user, { includeCredentials = false } = {}) {
     id: String(obj._id),
     name: obj.name ?? null,
     email: obj.email,
+    email_verified: Boolean(obj.email_verified),
     password_reset_required: obj.password_reset_required,
     payment_status: obj.payment_status,
     age: obj.age ?? null,
