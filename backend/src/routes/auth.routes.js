@@ -2,6 +2,8 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
+import jwksClient from 'jwks-rsa';
 import { config, features } from '../config.js';
 import { User, sanitizeUser } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
@@ -33,6 +35,72 @@ const OTP_MAX_ATTEMPTS = 5;
 
 const hashOtp = (email, otp) =>
   crypto.createHmac('sha256', config.jwtSecret).update(`${email}:${otp}`).digest('hex');
+
+// ── Social sign-in (Google / Apple) ──────────────────────────────────────────
+
+const googleClient = new OAuth2Client();
+
+const appleJwks = jwksClient({
+  jwksUri: 'https://appleid.apple.com/auth/keys',
+  cache: true,
+  cacheMaxAge: 12 * 60 * 60 * 1000, // 12h — Apple rotates keys infrequently
+});
+
+const getAppleSigningKey = (header, callback) => {
+  appleJwks.getSigningKey(header.kid, (err, key) => {
+    if (err) return callback(err);
+    callback(null, key.getPublicKey());
+  });
+};
+
+const verifyAppleIdentityToken = (identityToken) =>
+  new Promise((resolve, reject) => {
+    jwt.verify(identityToken, getAppleSigningKey, { algorithms: ['RS256'] }, (err, payload) => {
+      if (err) return reject(err);
+      resolve(payload);
+    });
+  });
+
+/**
+ * Find the user for a social sign-in, or create one. Matches first by the
+ * provider id (returning user), then falls back to matching by email and
+ * linking the provider onto that existing account (e.g. a user who first
+ * registered with a password, now also using "Sign in with Google").
+ */
+export const findOrCreateSocialUser = async ({ provider, providerId, email, name, emailVerified }) => {
+  const field = provider === 'google' ? 'google_id' : 'apple_id';
+
+  let user = await User.findOne({ [field]: providerId });
+  if (user) return user;
+
+  user = await User.findOne({ email });
+  if (user) {
+    user[field] = providerId;
+    if (emailVerified) user.email_verified = true;
+    await user.save();
+    return user;
+  }
+
+  user = await User.create({
+    name: name || email.split('@')[0],
+    email,
+    [field]: providerId,
+    email_verified: Boolean(emailVerified),
+    payment_status: 'pending',
+    password_reset_required: false,
+  });
+  sendAdminNotification({ name: user.name, email, age: null, gender: null }).catch(() => {});
+  return user;
+};
+
+const socialSignInResponse = async (user) => {
+  const latest = await Assessment.findOne({ user_id: user._id }).sort({ created_at: -1 });
+  return {
+    token: signUserToken(user._id),
+    user: sanitizeUser(user),
+    latestAssessment: latest ? sanitizeAssessment(latest) : null,
+  };
+};
 
 /**
  * POST /api/auth/send-otp
@@ -137,12 +205,20 @@ const passwordMatches = async (user, password) => {
 
 /**
  * POST /api/auth/register
- * Body: { name, email, age?, gender?, paymentStatus?: 'pending'|'demo',
+ * Body: { name, email, age?, gender?, password?, paymentStatus?: 'pending'|'demo',
  *         passwordResetRequired?: boolean }
- * Creates the account immediately — no OTP needed beforehand and no
- * `password` field accepted. Generates a temporary password (shown once)
- * and returns a ready-to-use JWT right away. Sends credentials +
- * admin-notification emails when SMTP is configured (best-effort).
+ * Creates the account immediately — no OTP needed beforehand. Returns a
+ * ready-to-use JWT right away. Sends credentials + admin-notification
+ * emails when SMTP is configured (best-effort).
+ *
+ * Password: `password` is OPTIONAL.
+ *  - If provided (min 6 chars), it's used as-is (hashed) as the account's
+ *    real password — password_reset_required is forced false and no
+ *    tempPassword is generated or emailed (a user's own chosen password is
+ *    never sent back over email).
+ *  - If omitted, the backend generates an 8-character temporary password,
+ *    returns it once as `tempPassword`, emails it, and password_reset_required
+ *    defaults to true (the app should prompt a reset via /change-password).
  *
  * Email verification happens AFTER this call: the new user starts with
  * email_verified:false — call /send-otp then /verify-otp with the same
@@ -158,17 +234,23 @@ router.post('/register', async (req, res) => {
     ? asInt(body.age, 'age', { min: 10, max: 120 })
     : null;
   const gender = asString(body.gender, 'gender', { required: false, maxLength: 30 }) || null;
+  const ownPassword = asString(body.password, 'password', { required: false, maxLength: 200 });
+  if (ownPassword) {
+    assert(ownPassword.length >= 6, 'password must be at least 6 characters', ['password']);
+  }
   // Self-registration may only create free/demo accounts — never 'paid'.
   const paymentStatus = body.paymentStatus === 'demo' ? 'demo' : 'pending';
-  const passwordResetRequired = body.passwordResetRequired === false ? false : true;
+  const passwordResetRequired = ownPassword
+    ? false
+    : (body.passwordResetRequired === false ? false : true);
 
   const existing = await User.findOne({ email }).lean();
   if (existing) {
     return res.status(409).json({ error: 'This email is already registered. Please log in instead.' });
   }
 
-  const tempPassword = generateTempPassword();
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  const tempPassword = ownPassword ? null : generateTempPassword();
+  const passwordHash = await bcrypt.hash(ownPassword || tempPassword, 10);
 
   const user = await User.create({
     name,
@@ -216,6 +298,96 @@ router.post('/login', async (req, res) => {
     user: sanitizeUser(user),
     latestAssessment: latest ? sanitizeAssessment(latest) : null,
   });
+});
+
+/**
+ * POST /api/auth/google
+ * Body: { idToken, name? }
+ * `idToken` is the Google ID token the client SDK returns after the user
+ * picks a Google account. Verified server-side against Google's public keys
+ * — never trust a client-supplied email/name alone. Finds an existing user
+ * by google_id, else links by matching email, else creates a new account.
+ * Response shape matches /login: { token, user, latestAssessment }.
+ */
+router.post('/google', async (req, res) => {
+  if (!features.googleSignIn) {
+    return res.status(501).json({
+      error: 'Google sign-in is not configured on the server.',
+      message: 'Set GOOGLE_CLIENT_IDS (or GOOGLE_CLIENT_ID) to enable it.',
+    });
+  }
+  const body = req.body || {};
+  const idToken = asString(body.idToken, 'idToken', { required: true, maxLength: 4096 });
+  const fallbackName = asString(body.name, 'name', { required: false, maxLength: 200 });
+
+  let payload;
+  try {
+    const ticket = await googleClient.verifyIdToken({ idToken, audience: config.googleClientIds });
+    payload = ticket.getPayload();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired Google token.' });
+  }
+
+  const email = String(payload.email || '').trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ error: 'This Google account has no email to sign in with.' });
+  }
+
+  const user = await findOrCreateSocialUser({
+    provider: 'google',
+    providerId: payload.sub,
+    email,
+    name: payload.name || fallbackName,
+    emailVerified: payload.email_verified === true || payload.email_verified === 'true',
+  });
+
+  res.json(await socialSignInResponse(user));
+});
+
+/**
+ * POST /api/auth/apple
+ * Body: { identityToken, name? }
+ * `identityToken` is the JWT Apple returns from "Sign in with Apple",
+ * verified server-side against Apple's published JWKS. Apple only sends the
+ * user's name from the CLIENT on their very first sign-in ever (it isn't in
+ * the token) — pass it as `name` that one time so it gets stored.
+ * Response shape matches /login: { token, user, latestAssessment }.
+ */
+router.post('/apple', async (req, res) => {
+  if (!features.appleSignIn) {
+    return res.status(501).json({
+      error: 'Apple sign-in is not configured on the server.',
+      message: 'Set APPLE_CLIENT_IDS (or APPLE_CLIENT_ID) to enable it.',
+    });
+  }
+  const body = req.body || {};
+  const identityToken = asString(body.identityToken, 'identityToken', { required: true, maxLength: 4096 });
+  const fallbackName = asString(body.name, 'name', { required: false, maxLength: 200 });
+
+  let payload;
+  try {
+    payload = await verifyAppleIdentityToken(identityToken);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired Apple token.' });
+  }
+  if (payload.iss !== 'https://appleid.apple.com' || !config.appleClientIds.includes(payload.aud)) {
+    return res.status(401).json({ error: 'Invalid Apple token.' });
+  }
+
+  const email = String(payload.email || '').trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ error: 'This Apple account has no email to sign in with.' });
+  }
+
+  const user = await findOrCreateSocialUser({
+    provider: 'apple',
+    providerId: payload.sub,
+    email,
+    name: fallbackName,
+    emailVerified: payload.email_verified === true || payload.email_verified === 'true',
+  });
+
+  res.json(await socialSignInResponse(user));
 });
 
 /**
