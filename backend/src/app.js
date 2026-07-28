@@ -83,6 +83,8 @@ const health = (req, res) =>
       ai: features.ai,
       stripeWebhook: features.stripeWebhook,
       email: features.email,
+      googleSignIn: features.googleSignIn,
+      appleSignIn: features.appleSignIn,
     },
     timestamp: new Date().toISOString(),
   });
