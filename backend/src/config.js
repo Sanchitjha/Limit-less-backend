@@ -68,6 +68,14 @@ export const config = {
   },
   adminNotifyEmail: process.env.ADMIN_NOTIFY_EMAIL || '',
   frontendUrl: (process.env.FRONTEND_URL || '').replace(/\/+$/, ''),
+
+  // Social sign-in — comma-separated list of accepted audiences, since a
+  // mobile app + web app pair typically use different OAuth client IDs for
+  // the same sign-in flow.
+  googleClientIds: (process.env.GOOGLE_CLIENT_IDS || process.env.GOOGLE_CLIENT_ID || '')
+    .split(',').map((s) => s.trim()).filter(Boolean),
+  appleClientIds: (process.env.APPLE_CLIENT_IDS || process.env.APPLE_CLIENT_ID || '')
+    .split(',').map((s) => s.trim()).filter(Boolean),
 };
 
 export const features = {
@@ -75,6 +83,8 @@ export const features = {
   ai: Boolean(config.anthropicApiKey),
   stripeWebhook: Boolean(config.stripeWebhookSecret && config.mongoUri),
   email: Boolean(config.smtp.host && config.smtp.user),
+  googleSignIn: config.googleClientIds.length > 0,
+  appleSignIn: config.appleClientIds.length > 0,
 };
 
 if (
