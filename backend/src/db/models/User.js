@@ -18,6 +18,11 @@ const userSchema = new mongoose.Schema(
     password_hash: { type: String, default: null },
     password_reset_required: { type: Boolean, default: true },
     email_verified: { type: Boolean, default: false },
+    // No `default` here on purpose — a sparse unique index only skips
+    // documents where the field is truly ABSENT, not ones explicitly set to
+    // null, so a default of null would collide across every non-social user.
+    google_id: { type: String, unique: true, sparse: true },
+    apple_id: { type: String, unique: true, sparse: true },
     payment_status: {
       type: String,
       enum: PAYMENT_STATUSES,
@@ -46,6 +51,9 @@ export function sanitizeUser(user, { includeCredentials = false } = {}) {
     name: obj.name ?? null,
     email: obj.email,
     email_verified: Boolean(obj.email_verified),
+    has_password: Boolean(obj.password_hash),
+    google_linked: Boolean(obj.google_id),
+    apple_linked: Boolean(obj.apple_id),
     password_reset_required: obj.password_reset_required,
     payment_status: obj.payment_status,
     age: obj.age ?? null,
