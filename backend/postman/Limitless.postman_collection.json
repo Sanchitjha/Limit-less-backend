@@ -71,6 +71,62 @@
           }
         },
         {
+          "name": "1b. Google Sign-In (register or login)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idToken\": \"PASTE_THE_GOOGLE_ID_TOKEN_FROM_THE_CLIENT_SDK\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/google", "host": ["{{baseUrl}}"], "path": ["api", "auth", "google"] },
+            "description": "ONE call does both register AND login — no separate step needed. `idToken` is the Google ID token your app's Google Sign-In SDK returns after the user picks an account (NOT an access token — must be the ID token / JWT). The backend verifies it server-side against Google's public keys and the configured GOOGLE_CLIENT_IDS.\n\n- New email → creates an account (email_verified is set to true immediately, since Google already verified it) and returns a token.\n- Matching email already registered (e.g. via password) → links this Google account onto it and logs in.\n- Same Google account signing in again → logs into the same account.\n\n501 if the server doesn't have GOOGLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience. 400 if the Google account has no email.\n\nSuccess: 200 { token, user, latestAssessment } — same shape as '4. Login'."
+          }
+        },
+        {
+          "name": "1c. Apple Sign-In (register or login)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userId', json.user.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"identityToken\": \"PASTE_THE_APPLE_IDENTITY_TOKEN_FROM_THE_CLIENT_SDK\",\n  \"name\": \"Optional — Apple only ever sends the real name on the very first sign-in, straight from the client, not inside the token\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/apple", "host": ["{{baseUrl}}"], "path": ["api", "auth", "apple"] },
+            "description": "ONE call does both register AND login. `identityToken` is the JWT \"Sign in with Apple\" returns to the app. Verified server-side against Apple's published keys and the configured APPLE_CLIENT_IDS (your app's Bundle ID / Services ID).\n\nSame find-or-create/link behavior as Google above, matched by email. `name` is optional and only meaningful on a user's very first-ever Apple sign-in — send it then if your app collected it, otherwise omit it.\n\n501 if the server doesn't have APPLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience/wrong issuer. 400 if the Apple account has no email (can happen with Apple's private relay in rare setups).\n\nSuccess: 200 { token, user, latestAssessment } — same shape as '4. Login'."
+          }
+        },
+        {
           "name": "2. Send OTP (after registering)",
           "event": [
             {
