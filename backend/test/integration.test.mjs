@@ -59,11 +59,22 @@ process.env.SMTP_HOST = '';
 process.env.SMTP_USER = '';
 process.env.SMTP_PASS = '';
 process.env.NODE_ENV = 'test';
+process.env.GOOGLE_CLIENT_IDS = 'test-google-client-id';
+process.env.APPLE_CLIENT_IDS = 'test-apple-client-id';
+
+// Stub Google's real network verification with a fake payload passed straight
+// through as the "idToken" (JSON string) — keeps the test offline while still
+// exercising the real route/account-linking logic around it.
+const { OAuth2Client } = await import('google-auth-library');
+OAuth2Client.prototype.verifyIdToken = async function ({ idToken }) {
+  return { getPayload: () => JSON.parse(idToken) };
+};
 
 const { connectMongo, disconnectMongo } = await import('../src/db/mongo.js');
 await connectMongo();
 const { User } = await import('../src/db/models/User.js');
 const { default: app } = await import('../src/app.js');
+const { findOrCreateSocialUser } = await import('../src/routes/auth.routes.js');
 
 const server = app.listen(0);
 await new Promise((r) => server.once('listening', r));
@@ -135,6 +146,27 @@ await check('POST /api/auth/register creates the account immediately (no OTP nee
   userToken = r.data.token;
   userId = r.data.user.id;
   tempPassword = r.data.tempPassword;
+});
+
+await check('register with own password → login works immediately, no tempPassword issued', async () => {
+  const r = await api('POST', '/api/auth/register', {
+    body: { name: 'Own Pw', email: 'ownpw@example.com', password: 'MyOwnPass123' },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.data.tempPassword, null);
+  assert.equal(r.data.user.password_reset_required, false);
+
+  const login = await api('POST', '/api/auth/login', {
+    body: { email: 'ownpw@example.com', password: 'MyOwnPass123' },
+  });
+  assert.equal(login.status, 200);
+});
+
+await check('register with too-short own password → 422', async () => {
+  const r = await api('POST', '/api/auth/register', {
+    body: { name: 'Short Pw', email: 'shortpw@example.com', password: '123' },
+  });
+  assert.equal(r.status, 422);
 });
 
 await check('register duplicate email → 409', async () => {
@@ -269,6 +301,93 @@ await check('logout revokes the token — further requests with it are rejected'
   // The main userToken used by the rest of the suite (a separate login) is untouched.
   const stillWorks = await api('GET', `/api/users/${userId}`, { token: userToken });
   assert.equal(stillWorks.status, 200);
+});
+
+// ── Social sign-in (Google / Apple) ─────────────────────────────────────────
+
+await check('POST /api/auth/google rejects a garbage token', async () => {
+  const r = await api('POST', '/api/auth/google', { body: { idToken: 'not-a-real-token' } });
+  assert.equal(r.status, 401);
+});
+
+await check('POST /api/auth/google creates a new user on first sign-in', async () => {
+  const fakeGooglePayload = JSON.stringify({
+    sub: 'google-sub-12345',
+    email: 'social.google@example.com',
+    email_verified: true,
+    name: 'Google User',
+  });
+  const r = await api('POST', '/api/auth/google', { body: { idToken: fakeGooglePayload } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.user.email, 'social.google@example.com');
+  assert.equal(r.data.user.email_verified, true);
+  assert.equal(r.data.user.google_linked, true);
+  assert.equal(r.data.user.has_password, false, 'no password was ever set for a pure Google account');
+  assert.ok(r.data.token);
+
+  // Signing in again with the same google sub reuses the same account, not a duplicate.
+  const again = await api('POST', '/api/auth/google', { body: { idToken: fakeGooglePayload } });
+  assert.equal(again.status, 200);
+  assert.equal(again.data.user.id, r.data.user.id);
+});
+
+await check('POST /api/auth/google links to an existing password account by email', async () => {
+  const fakeGooglePayload = JSON.stringify({
+    sub: 'google-sub-existing-user',
+    email: 'test.user@example.com', // same email as the main password-based test user
+    email_verified: true,
+    name: 'Test User',
+  });
+  const r = await api('POST', '/api/auth/google', { body: { idToken: fakeGooglePayload } });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.user.id, userId, 'links onto the existing account instead of creating a duplicate');
+  assert.equal(r.data.user.google_linked, true);
+  assert.equal(r.data.user.has_password, true, 'linking does not remove the existing password');
+});
+
+await check('POST /api/auth/apple rejects a garbage token', async () => {
+  const r = await api('POST', '/api/auth/apple', { body: { identityToken: 'not-a-real-token' } });
+  assert.equal(r.status, 401);
+});
+
+await check('findOrCreateSocialUser: apple provider creates, links, and reuses correctly', async () => {
+  // Exercised directly since faking Apple's real JWKS-signed token isn't
+  // worth the fragility — this is the exact logic /api/auth/apple calls
+  // after verifying the token, shared with the Google route above.
+  const created = await findOrCreateSocialUser({
+    provider: 'apple',
+    providerId: 'apple-sub-99999',
+    email: 'social.apple@example.com',
+    name: 'Apple User',
+    emailVerified: true,
+  });
+  assert.equal(created.email, 'social.apple@example.com');
+  assert.equal(created.apple_id, 'apple-sub-99999');
+  assert.equal(created.email_verified, true);
+
+  const reused = await findOrCreateSocialUser({
+    provider: 'apple',
+    providerId: 'apple-sub-99999',
+    email: 'social.apple@example.com',
+    name: 'Apple User',
+    emailVerified: true,
+  });
+  assert.equal(String(reused._id), String(created._id));
+
+  const preExisting = await api('POST', '/api/auth/register', {
+    body: { name: 'Apple Link Target', email: 'apple.link.target@example.com', password: 'PlainPass123' },
+  });
+  assert.equal(preExisting.status, 201);
+
+  const linked = await findOrCreateSocialUser({
+    provider: 'apple',
+    providerId: 'apple-sub-for-existing-account',
+    email: 'apple.link.target@example.com',
+    name: 'Apple Link Target',
+    emailVerified: true,
+  });
+  assert.equal(String(linked._id), preExisting.data.user.id, 'links onto the pre-existing account by email');
+  assert.equal(linked.apple_id, 'apple-sub-for-existing-account');
 });
 
 // ── Analyze with auto-persistence ────────────────────────────────────────────
@@ -548,8 +667,9 @@ await check('user cannot access another user (403)', async () => {
 await check('GET /api/admin/users lists users with assessments + credentials', async () => {
   const r = await api('GET', '/api/admin/users', { token: adminToken });
   assert.equal(r.status, 200);
-  // main test user + "Inline Otp" (merged register test) + "Other" (403 test) + "Other Owner" (404 assessmentId test)
-  assert.equal(r.data.length, 4);
+  // main test user + Cooldown + Own Pw + social.google + social.apple + Apple Link Target
+  // + Other (403 test) + Other Owner (404 assessmentId test)
+  assert.equal(r.data.length, 8);
   const me = r.data.find((u) => u.id === userId);
   assert.ok(me.assessments.length >= 2);
   assert.ok(me.report_json, 'latest report mirrored onto user');
@@ -566,7 +686,7 @@ await check('GET /api/admin/users/:id returns detail', async () => {
 await check('GET /api/admin/stats aggregates correctly', async () => {
   const r = await api('GET', '/api/admin/stats', { token: adminToken });
   assert.equal(r.status, 200);
-  assert.equal(r.data.total_users, 4);
+  assert.equal(r.data.total_users, 8);
   assert.equal(r.data.paid_users, 1);
   assert.equal(r.data.mrr, 19);
   assert.ok(r.data.completed_assessments >= 2);
