@@ -79,10 +79,28 @@ const footerHtml = `
 /**
  * Welcome / credentials email sent right after registration.
  * Subject: "Welcome <Name> | Limitless World"
+ * When tempPassword is falsy (the user chose their own password at
+ * registration), the password row/notice is omitted — a user's own
+ * password is never echoed back over email.
  */
 export const sendCredentialsEmail = ({ name, email, tempPassword, paymentStatus = 'pending' }) => {
   const firstName = (name || '').trim().split(/\s+/)[0] || 'there';
   const plan = planLabel(paymentStatus);
+
+  const passwordRow = tempPassword
+    ? `
+          <tr>
+            <td style="padding:8px;color:#64748B;font-size:13px">Password</td>
+            <td style="padding:8px;color:#0F172A;font-size:14px"><strong style="font-family:Consolas,monospace;letter-spacing:1px">${tempPassword}</strong></td>
+          </tr>`
+    : '';
+
+  const resetNotice = tempPassword
+    ? `
+        <p style="color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:0 0 8px">
+          For first time login you have to reset your password.
+        </p>`
+    : '';
 
   const html = `
   <div style="background:#F8FAFC;padding:24px 0">
@@ -104,16 +122,9 @@ export const sendCredentialsEmail = ({ name, email, tempPassword, paymentStatus 
           <tr>
             <td style="padding:8px;color:#64748B;font-size:13px">Username</td>
             <td style="padding:8px;color:#0F172A;font-size:13px"><strong>${email}</strong></td>
-          </tr>
-          <tr>
-            <td style="padding:8px;color:#64748B;font-size:13px">Password</td>
-            <td style="padding:8px;color:#0F172A;font-size:14px"><strong style="font-family:Consolas,monospace;letter-spacing:1px">${tempPassword}</strong></td>
-          </tr>
+          </tr>${passwordRow}
         </table>
-
-        <p style="color:#B45309;background:#FEF3C7;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:0 0 8px">
-          For first time login you have to reset your password.
-        </p>
+${resetNotice}
         ${
           config.frontendUrl
             ? `<p style="margin:20px 0 8px"><a href="${config.frontendUrl}" style="display:inline-block;background:#3B82F6;color:#FFFFFF;padding:12px 28px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:bold">Log in to Limitless →</a></p>`
@@ -133,10 +144,9 @@ export const sendCredentialsEmail = ({ name, email, tempPassword, paymentStatus 
     '',
     `Your Plan : ${plan}`,
     `Username : ${email}`,
-    `Password : ${tempPassword}`,
+    ...(tempPassword ? [`Password : ${tempPassword}`] : []),
     '',
-    'For first time login you have to reset your password.',
-    '',
+    ...(tempPassword ? ['For first time login you have to reset your password.', ''] : []),
     CONFIDENTIALITY,
     '',
     `Company Name : ${COMPANY}`,
