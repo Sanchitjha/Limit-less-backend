@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Limitless Backend APIs",
-    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — REGISTER COMES FIRST, OTP comes after:\n1. POST /api/auth/register — just name/email/age/gender. NO `password` field (not accepted) and NO `otp` field needed. The account is created immediately. The backend generates an 8-character temp password itself and emails it + returns it as `tempPassword`, along with a ready-to-use `token`. The new user starts with email_verified:false.\n2. Use `token` as `Authorization: Bearer <token>` right away for the rest of the app — verification is NOT a gate on login/using the app.\n3. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL) to that same email. If SMTP is not configured on the server, the response includes `devOtp` for testing.\n4. POST /api/auth/verify-otp — flips email_verified to true on the account.\n5. POST /api/auth/login is for RETURNING users (email + the temp or user-set password).\n6. POST /api/auth/logout (Bearer token) actually revokes that token server-side — call it when the user signs out.\n7. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
+    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — REGISTER COMES FIRST, OTP comes after:\n1. POST /api/auth/register — name/email/age/gender, and an OPTIONAL `password` field. NO `otp` field needed. The account is created immediately.\n   - If you send `password` (min 6 chars), that's the user's real password from the start — `tempPassword` in the response will be null, and no reset is forced.\n   - If you omit `password`, the backend generates an 8-character temp password, emails it, and returns it once as `tempPassword` — the app should then prompt a reset via /change-password on first login.\n   Either way you get a ready-to-use `token` immediately. The new user starts with email_verified:false.\n2. Use `token` as `Authorization: Bearer <token>` right away for the rest of the app — verification is NOT a gate on login/using the app.\n3. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL) to that same email. If SMTP is not configured on the server, the response includes `devOtp` for testing.\n4. POST /api/auth/verify-otp — flips email_verified to true on the account.\n5. POST /api/auth/login is for RETURNING users (email + whichever password is currently active — the one they chose at registration, the emailed temp one, or a later change-password/reset-password value).\n6. POST /api/auth/logout (Bearer token) actually revokes that token server-side — call it when the user signs out.\n7. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -12,6 +12,7 @@
     { "key": "userId", "value": "", "type": "string" },
     { "key": "assessmentId", "value": "", "type": "string" },
     { "key": "userEmail", "value": "ravik392320@gmail.com", "type": "string" },
+    { "key": "userPassword", "value": "MyOwnPass123", "type": "string" },
     { "key": "userOtp", "value": "", "type": "string" }
   ],
   "item": [
@@ -41,7 +42,7 @@
       "name": "Auth",
       "item": [
         {
-          "name": "1. Register (no password, no otp)",
+          "name": "1. Register (password optional, no otp)",
           "event": [
             {
               "listen": "test",
@@ -63,10 +64,10 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\"\n}"
+              "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"password\": \"{{userPassword}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
-            "description": "The FIRST call for a new user — no OTP needed before this. IMPORTANT: do NOT send a `password` field, it is not accepted. The backend GENERATES an 8-character temporary password itself, hashes it, emails it to the user (welcome email) and returns it once as `tempPassword` in this response.\n\n409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — start using it immediately, e.g. Authorization: Bearer {{userToken}}. `user.email_verified` is false at this point; use '2. Send OTP' + '3. Verify OTP' below to verify the email AFTER registering (verification does not block login or app usage)."
+            "description": "The FIRST call for a new user — no OTP needed before this. `password` is OPTIONAL:\n- INCLUDE it (min 6 chars, as shown) if you want the user to set their own password on the registration screen — it's used as-is, `tempPassword` in the response will be `null`, and `password_reset_required` is false (no forced reset).\n- OMIT it entirely to fall back to auto-generated credentials — the backend generates an 8-character temp password, emails it (welcome email), and returns it once as `tempPassword`. `password_reset_required` is then true.\n\n422 if a provided `password` is under 6 characters. 409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — start using it immediately, e.g. Authorization: Bearer {{userToken}}. `user.email_verified` is false at this point; use '2. Send OTP' + '3. Verify OTP' below to verify the email AFTER registering (verification does not block login or app usage)."
           }
         },
         {
@@ -129,10 +130,10 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"PASTE_TEMP_OR_USER_PASSWORD\"\n}"
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
-            "description": "For returning users. Matches against the temp password (plaintext, first login) or the user-set password (bcrypt hash, after change-password). 401 on any mismatch.\n\nSuccess: 200 { token, user, latestAssessment }."
+            "description": "For returning users. Defaults to `{{userPassword}}` — the same value used in '1. Register'. If that request was run WITHOUT a `password` field instead (auto-generated flow), replace this with the `tempPassword` from that response (or whatever the user later set via change-password/reset-password). 401 on any mismatch.\n\nSuccess: 200 { token, user, latestAssessment }."
           }
         },
         {
