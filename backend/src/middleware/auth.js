@@ -12,6 +12,20 @@ export const signUserToken = (userId) =>
 export const signAdminToken = () =>
   jwt.sign({ sub: 'admin', role: 'admin', jti: crypto.randomUUID() }, config.jwtSecret, { expiresIn: '12h' });
 
+// Long-lived, separate from the access token (config.jwtExpiresIn, currently
+// 7d) — lets a client silently get a new access token instead of forcing a
+// full re-login every 7 days. Deliberately not shortening the access token
+// itself: the website has no refresh logic and would start logging users out
+// early if it did.
+const REFRESH_TOKEN_EXPIRES_IN = '60d';
+
+export const signRefreshToken = (userId) =>
+  jwt.sign(
+    { sub: String(userId), role: 'user', type: 'refresh', jti: crypto.randomUUID() },
+    config.jwtSecret,
+    { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
+  );
+
 /** 503 guard for routes that need MongoDB. */
 export const requireDb = (req, res, next) => {
   if (!isDbReady()) {

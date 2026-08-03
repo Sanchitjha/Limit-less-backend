@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Limitless Backend APIs",
-    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — REGISTER COMES FIRST, OTP comes after:\n1. POST /api/auth/register — name/email/age/gender, and an OPTIONAL `password` field. NO `otp` field needed. The account is created immediately.\n   - If you send `password` (min 6 chars), that's the user's real password from the start — `tempPassword` in the response will be null, and no reset is forced.\n   - If you omit `password`, the backend generates an 8-character temp password, emails it, and returns it once as `tempPassword` — the app should then prompt a reset via /change-password on first login.\n   Either way you get a ready-to-use `token` immediately. The new user starts with email_verified:false.\n2. Use `token` as `Authorization: Bearer <token>` right away for the rest of the app — verification is NOT a gate on login/using the app.\n3. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL) to that same email. If SMTP is not configured on the server, the response includes `devOtp` for testing.\n4. POST /api/auth/verify-otp — flips email_verified to true on the account.\n5. POST /api/auth/login is for RETURNING users (email + whichever password is currently active — the one they chose at registration, the emailed temp one, or a later change-password/reset-password value).\n6. POST /api/auth/logout (Bearer token) actually revokes that token server-side — call it when the user signs out.\n7. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
+    "description": "Complete, verified API surface for the Limitless cognitive-wellness platform.\n\nThere are TWO separate services:\n1. Node.js backend ({{baseUrl}}) — accounts, auth, users, assessments (storage), admin, plans, enquiries, PDF storage, payments.\n2. AI model service ({{modelUrl}}) — the ONLY source of question generation, scoring/analysis and PDF generation.\n\nAuth flow for a NEW user (mobile app) — REGISTER COMES FIRST, OTP comes after:\n1. POST /api/auth/register — name/email/age/gender, and an OPTIONAL `password` field. NO `otp` field needed. The account is created immediately.\n   - If you send `password` (min 6 chars), that's the user's real password from the start — `tempPassword` in the response will be null, and no reset is forced.\n   - If you omit `password`, the backend generates an 8-character temp password, emails it, and returns it once as `tempPassword` — the app should then prompt a reset via /change-password on first login.\n   Either way you get a ready-to-use `token` **and** `refreshToken` immediately. The new user starts with email_verified:false.\n   ALTERNATIVE entry points ('1b.' and '1c.' below): POST /api/auth/google or POST /api/auth/apple — ONE call does register-or-login for a Google/Apple account, no separate step needed. Both currently return 501 in this environment until the server has real GOOGLE_CLIENT_IDS / APPLE_CLIENT_IDS configured.\n2. Use `token` as `Authorization: Bearer <token>` right away for the rest of the app — verification is NOT a gate on login/using the app.\n3. POST /api/auth/send-otp — emails a 6-digit code (10 min TTL) to that same email. If SMTP is not configured on the server, the response includes `devOtp` for testing.\n4. POST /api/auth/verify-otp — flips email_verified to true on the account.\n5. POST /api/auth/login is for RETURNING users (email + whichever password is currently active — the one they chose at registration, the emailed temp one, or a later change-password/reset-password value). Google/Apple accounts don't use this — they sign in again via '1b.'/'1c.' instead. Also returns a fresh `token` + `refreshToken` pair.\n5b. POST /api/auth/refresh — body `{ refreshToken }` — exchanges it for a brand-new `token` + `refreshToken` (the old refresh token is consumed/rotated). Call this instead of forcing a re-login when the 7-day access token is close to expiring; the refresh token itself lasts 60 days.\n6. POST /api/auth/logout (Bearer token, optional `{ refreshToken }` in the body) revokes both server-side — call it when the user signs out.\n7. Forgot password (existing users): POST /api/auth/forgot-password (email only) then POST /api/auth/reset-password (email + otp + newPassword) — no need to know the old password.\n\nThe collection auto-saves `userToken`, `userRefreshToken`, `adminToken`, `userId`, `assessmentId` and `userOtp` into collection variables via test scripts on the relevant requests, so you can run requests top-to-bottom inside a folder without manually copy-pasting values.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -13,7 +13,8 @@
     { "key": "assessmentId", "value": "", "type": "string" },
     { "key": "userEmail", "value": "ravik392320@gmail.com", "type": "string" },
     { "key": "userPassword", "value": "MyOwnPass123", "type": "string" },
-    { "key": "userOtp", "value": "", "type": "string" }
+    { "key": "userOtp", "value": "", "type": "string" },
+    { "key": "userRefreshToken", "value": "", "type": "string" }
   ],
   "item": [
     {
@@ -51,6 +52,7 @@
                   "if (pm.response.code === 201) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userRefreshToken', json.refreshToken);",
                   "  pm.collectionVariables.set('userId', json.user.id);",
                   "  console.log('Temp password (also emailed to the user):', json.tempPassword);",
                   "}"
@@ -67,7 +69,7 @@
               "raw": "{\n  \"name\": \"Ravi Kumar\",\n  \"email\": \"{{userEmail}}\",\n  \"age\": 28,\n  \"gender\": \"male\",\n  \"password\": \"{{userPassword}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "auth", "register"] },
-            "description": "The FIRST call for a new user — no OTP needed before this. `password` is OPTIONAL:\n- INCLUDE it (min 6 chars, as shown) if you want the user to set their own password on the registration screen — it's used as-is, `tempPassword` in the response will be `null`, and `password_reset_required` is false (no forced reset).\n- OMIT it entirely to fall back to auto-generated credentials — the backend generates an 8-character temp password, emails it (welcome email), and returns it once as `tempPassword`. `password_reset_required` is then true.\n\n422 if a provided `password` is under 6 characters. 409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token }. `token` is a ready-to-use 7-day JWT — start using it immediately, e.g. Authorization: Bearer {{userToken}}. `user.email_verified` is false at this point; use '2. Send OTP' + '3. Verify OTP' below to verify the email AFTER registering (verification does not block login or app usage)."
+            "description": "The FIRST call for a new user — no OTP needed before this. `password` is OPTIONAL:\n- INCLUDE it (min 6 chars, as shown) if you want the user to set their own password on the registration screen — it's used as-is, `tempPassword` in the response will be `null`, and `password_reset_required` is false (no forced reset).\n- OMIT it entirely to fall back to auto-generated credentials — the backend generates an 8-character temp password, emails it (welcome email), and returns it once as `tempPassword`. `password_reset_required` is then true.\n\n422 if a provided `password` is under 6 characters. 409 if the email is already registered.\n\nSuccess: 201 { user, tempPassword, token, refreshToken }. `token` is a ready-to-use 7-day JWT — start using it immediately, e.g. Authorization: Bearer {{userToken}}. `refreshToken` lasts 60 days — store it and use '4b. Refresh Token' to get a new `token` without asking the user to log in again. `user.email_verified` is false at this point; use '2. Send OTP' + '3. Verify OTP' below to verify the email AFTER registering (verification does not block login or app usage)."
           }
         },
         {
@@ -80,6 +82,7 @@
                   "if (pm.response.code === 200) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userRefreshToken', json.refreshToken);",
                   "  pm.collectionVariables.set('userId', json.user.id);",
                   "}"
                 ],
@@ -95,7 +98,7 @@
               "raw": "{\n  \"idToken\": \"PASTE_THE_GOOGLE_ID_TOKEN_FROM_THE_CLIENT_SDK\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/google", "host": ["{{baseUrl}}"], "path": ["api", "auth", "google"] },
-            "description": "ONE call does both register AND login — no separate step needed. `idToken` is the Google ID token your app's Google Sign-In SDK returns after the user picks an account (NOT an access token — must be the ID token / JWT). The backend verifies it server-side against Google's public keys and the configured GOOGLE_CLIENT_IDS.\n\n- New email → creates an account (email_verified is set to true immediately, since Google already verified it) and returns a token.\n- Matching email already registered (e.g. via password) → links this Google account onto it and logs in.\n- Same Google account signing in again → logs into the same account.\n\n501 if the server doesn't have GOOGLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience. 400 if the Google account has no email.\n\nSuccess: 200 { token, user, latestAssessment } — same shape as '4. Login'."
+            "description": "ONE call does both register AND login — no separate step needed. `idToken` is the Google ID token your app's Google Sign-In SDK returns after the user picks an account (NOT an access token — must be the ID token / JWT). The backend verifies it server-side against Google's public keys and the configured GOOGLE_CLIENT_IDS.\n\n- New email → creates an account (email_verified is set to true immediately, since Google already verified it) and returns a token.\n- Matching email already registered (e.g. via password) → links this Google account onto it and logs in.\n- Same Google account signing in again → logs into the same account.\n\n501 if the server doesn't have GOOGLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience. 400 if the Google account has no email.\n\nSuccess: 200 { token, refreshToken, user, latestAssessment } — same shape as '4. Login'."
           }
         },
         {
@@ -108,6 +111,7 @@
                   "if (pm.response.code === 200) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userRefreshToken', json.refreshToken);",
                   "  pm.collectionVariables.set('userId', json.user.id);",
                   "}"
                 ],
@@ -123,7 +127,7 @@
               "raw": "{\n  \"identityToken\": \"PASTE_THE_APPLE_IDENTITY_TOKEN_FROM_THE_CLIENT_SDK\",\n  \"name\": \"Optional — Apple only ever sends the real name on the very first sign-in, straight from the client, not inside the token\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/apple", "host": ["{{baseUrl}}"], "path": ["api", "auth", "apple"] },
-            "description": "ONE call does both register AND login. `identityToken` is the JWT \"Sign in with Apple\" returns to the app. Verified server-side against Apple's published keys and the configured APPLE_CLIENT_IDS (your app's Bundle ID / Services ID).\n\nSame find-or-create/link behavior as Google above, matched by email. `name` is optional and only meaningful on a user's very first-ever Apple sign-in — send it then if your app collected it, otherwise omit it.\n\n501 if the server doesn't have APPLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience/wrong issuer. 400 if the Apple account has no email (can happen with Apple's private relay in rare setups).\n\nSuccess: 200 { token, user, latestAssessment } — same shape as '4. Login'."
+            "description": "ONE call does both register AND login. `identityToken` is the JWT \"Sign in with Apple\" returns to the app. Verified server-side against Apple's published keys and the configured APPLE_CLIENT_IDS (your app's Bundle ID / Services ID).\n\nSame find-or-create/link behavior as Google above, matched by email. `name` is optional and only meaningful on a user's very first-ever Apple sign-in — send it then if your app collected it, otherwise omit it.\n\n501 if the server doesn't have APPLE_CLIENT_IDS configured yet. 401 if the token is invalid/expired/wrong audience/wrong issuer. 400 if the Apple account has no email (can happen with Apple's private relay in rare setups).\n\nSuccess: 200 { token, refreshToken, user, latestAssessment } — same shape as '4. Login'."
           }
         },
         {
@@ -174,6 +178,7 @@
                   "if (pm.response.code === 200) {",
                   "  const json = pm.response.json();",
                   "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userRefreshToken', json.refreshToken);",
                   "  pm.collectionVariables.set('userId', json.user.id);",
                   "}"
                 ],
@@ -189,16 +194,51 @@
               "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/api/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "auth", "login"] },
-            "description": "For returning users. Defaults to `{{userPassword}}` — the same value used in '1. Register'. If that request was run WITHOUT a `password` field instead (auto-generated flow), replace this with the `tempPassword` from that response (or whatever the user later set via change-password/reset-password). 401 on any mismatch.\n\nSuccess: 200 { token, user, latestAssessment }."
+            "description": "For returning users. Defaults to `{{userPassword}}` — the same value used in '1. Register'. If that request was run WITHOUT a `password` field instead (auto-generated flow), replace this with the `tempPassword` from that response (or whatever the user later set via change-password/reset-password). 401 on any mismatch.\n\nSuccess: 200 { token, refreshToken, user, latestAssessment }."
+          }
+        },
+        {
+          "name": "4b. Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('userToken', json.token);",
+                  "  pm.collectionVariables.set('userRefreshToken', json.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{userRefreshToken}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api", "auth", "refresh"] },
+            "description": "Exchanges a still-valid refresh token for a brand-new `token` (access token) AND a brand-new `refreshToken`. Use this instead of making the user log in again when the 7-day access token is close to expiring — the refresh token itself is valid for 60 days.\n\nIMPORTANT — rotation: the refresh token you send is consumed the moment this call succeeds. Always store and use the NEW `refreshToken` from the response; reusing an old one that's already been exchanged returns 401 ('already been used or revoked').\n\n401 if the token is invalid, expired, not actually a refresh token (e.g. you accidentally sent an access token here), or its account no longer exists.\n\nSuccess: 200 { token, refreshToken }."
           }
         },
         {
           "name": "5. Logout",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{userRefreshToken}}\"\n}"
+            },
             "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "auth", "logout"] },
-            "description": "Actually revokes THIS token server-side (not just a client-side 'forget it') — any further request using the same token gets 401 immediately, even though it hasn't naturally expired yet (tokens last 7 days otherwise). Call this on the app's sign-out action, then discard the token locally too.\n\nSuccess: 200 { success: true, message }."
+            "description": "Actually revokes THIS access token server-side (not just a client-side 'forget it') — any further request using the same token gets 401 immediately, even though it hasn't naturally expired yet (tokens last 7 days otherwise). Call this on the app's sign-out action, then discard both tokens locally too.\n\nThe `refreshToken` in the body is OPTIONAL but recommended — pass the current one so it's revoked as well; otherwise it would keep working (via '4b. Refresh Token') until it naturally expires in 60 days, even after this logout call.\n\nSuccess: 200 { success: true, message }."
           }
         },
         {
@@ -386,7 +426,7 @@
               "raw": "{\n  \"analysis\": { \"...\": \"paste the object returned by /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
             },
             "url": { "raw": "{{modelUrl}}/api/v1/generate-pdf", "host": ["{{modelUrl}}"], "path": ["api", "v1", "generate-pdf"] },
-            "description": "Returns the raw PDF binary. In the mobile app flow, prefer calling {{baseUrl}}/api/reports/:userId/pdf instead — the Node backend calls this endpoint for you AND stores the result + saves the link on the assessment."
+            "description": "IMPORTANT: `analysis` is NOT something you build by hand — it must be the ENTIRE, unmodified JSON object that '/api/v1/analyze' (in the AI Model Service folder above) returned, pasted in as-is. It contains assessmentId, sessionTimestamp, overall, domains, lifestyleImpacts, riskIndicators, cognitiveAge, strengths, recommendations, progress, charts, audit, disclaimers, privacy — leaving any of these out (e.g. `domains`) causes a 500 error from this endpoint. Returns the raw PDF binary.\n\nIn the mobile app flow, prefer calling {{baseUrl}}/api/reports/:userId/pdf instead — the Node backend calls this endpoint for you AND stores the result + saves the link on the assessment."
           }
         },
         {
@@ -436,7 +476,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "reports", "{{userId}}", "pdf"]
             },
-            "description": "ALWAYS pass assessmentId when the user has more than one assessment — PDFs are keyed per-assessment, not per-user, to avoid overwriting/collisions. Auth: the user themself or an admin.\n\nServer-side paywall: if teaser=false and the user's payment_status is not 'paid', returns 403. Set teaser=true for the free preview report (no payment check).\n\nThe backend proxies the PDF generation itself — it calls {{modelUrl}}/api/v1/generate-pdf (or generate-teaser-pdf) server-side, so you never call the model service directly for this in the app; you just pass it the `analysis` object.\n\nReturns 201 { pdfUrl, fileName, assessment }. pdfUrl is a public link — download it with the 'Download Stored PDF' request below (no auth needed)."
+            "description": "IMPORTANT: `analysis` must be the ENTIRE, unmodified object returned by {{modelUrl}}/api/v1/analyze — don't hand-build a smaller version of it. Leaving out any of its fields (assessmentId, overall, domains, lifestyleImpacts, riskIndicators, cognitiveAge, strengths, recommendations, progress, charts, audit, disclaimers, privacy) causes PDF generation to fail server-side.\n\nALWAYS pass assessmentId when the user has more than one assessment — PDFs are keyed per-assessment, not per-user, to avoid overwriting/collisions. Auth: the user themself or an admin.\n\nServer-side paywall: if teaser=false and the user's payment_status is not 'paid', returns 403. Set teaser=true for the free preview report (no payment check).\n\nThe backend proxies the PDF generation itself — it calls {{modelUrl}}/api/v1/generate-pdf (or generate-teaser-pdf) server-side, so you never call the model service directly for this in the app; you just pass it the `analysis` object.\n\nReturns 201 { pdfUrl, fileName, assessment }. pdfUrl is a public link — download it with the 'Download Stored PDF' request below (no auth needed)."
           }
         },
         {

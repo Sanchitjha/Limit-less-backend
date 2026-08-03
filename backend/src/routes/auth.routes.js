@@ -9,7 +9,8 @@ import { User, sanitizeUser } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
 import { Otp } from '../db/models/Otp.js';
 import { RevokedToken } from '../db/models/RevokedToken.js';
-import { requireDb, requireAuth, signUserToken } from '../middleware/auth.js';
+import { RefreshToken } from '../db/models/RefreshToken.js';
+import { requireDb, requireAuth, signUserToken, signRefreshToken } from '../middleware/auth.js';
 import { assert, asInt, asString } from '../middleware/validate.js';
 import {
   sendCredentialsEmail,
@@ -35,6 +36,15 @@ const OTP_MAX_ATTEMPTS = 5;
 
 const hashOtp = (email, otp) =>
   crypto.createHmac('sha256', config.jwtSecret).update(`${email}:${otp}`).digest('hex');
+
+/** Issue an access token + refresh token pair, persisting the refresh token's jti. */
+const issueTokens = async (userId) => {
+  const token = signUserToken(userId);
+  const refreshToken = signRefreshToken(userId);
+  const decoded = jwt.decode(refreshToken);
+  await RefreshToken.create({ jti: decoded.jti, user_id: userId, expires_at: new Date(decoded.exp * 1000) });
+  return { token, refreshToken };
+};
 
 // ── Social sign-in (Google / Apple) ──────────────────────────────────────────
 
@@ -95,8 +105,10 @@ export const findOrCreateSocialUser = async ({ provider, providerId, email, name
 
 const socialSignInResponse = async (user) => {
   const latest = await Assessment.findOne({ user_id: user._id }).sort({ created_at: -1 });
+  const { token, refreshToken } = await issueTokens(user._id);
   return {
-    token: signUserToken(user._id),
+    token,
+    refreshToken,
     user: sanitizeUser(user),
     latestAssessment: latest ? sanitizeAssessment(latest) : null,
   };
@@ -224,6 +236,10 @@ const passwordMatches = async (user, password) => {
  * email_verified:false — call /send-otp then /verify-otp with the same
  * email to verify it. Verification does not block login or this response;
  * it only flips the `email_verified` flag on the user.
+ *
+ * Response also includes `refreshToken` (60d) — exchange it at /refresh for
+ * a new access token instead of forcing a re-login when this one nears
+ * expiry.
  */
 router.post('/register', async (req, res) => {
   const body = req.body || {};
@@ -268,10 +284,12 @@ router.post('/register', async (req, res) => {
   sendCredentialsEmail({ name, email, tempPassword, paymentStatus: user.payment_status }).catch(() => {});
   sendAdminNotification({ name, email, age, gender }).catch(() => {});
 
+  const { token, refreshToken } = await issueTokens(user._id);
   res.status(201).json({
     user: sanitizeUser(user),
     tempPassword,
-    token: signUserToken(user._id),
+    token,
+    refreshToken,
   });
 });
 
@@ -279,7 +297,7 @@ router.post('/register', async (req, res) => {
  * POST /api/auth/login
  * Body: { email, password }
  * Accepts the temporary password OR the user-set password.
- * Returns a JWT, the user, and their latest assessment (if any).
+ * Returns a JWT + refreshToken, the user, and their latest assessment (if any).
  */
 router.post('/login', async (req, res) => {
   const body = req.body || {};
@@ -292,9 +310,11 @@ router.post('/login', async (req, res) => {
   }
 
   const latest = await Assessment.findOne({ user_id: user._id }).sort({ created_at: -1 });
+  const { token, refreshToken } = await issueTokens(user._id);
 
   res.json({
-    token: signUserToken(user._id),
+    token,
+    refreshToken,
     user: sanitizeUser(user),
     latestAssessment: latest ? sanitizeAssessment(latest) : null,
   });
@@ -391,8 +411,50 @@ router.post('/apple', async (req, res) => {
 });
 
 /**
+ * POST /api/auth/refresh
+ * Body: { refreshToken }
+ * Exchanges a still-valid refresh token for a brand-new access token AND a
+ * new refresh token — the old refresh token is deleted the moment this
+ * succeeds (rotation), so it can't be redeemed a second time. Call this
+ * instead of forcing a full re-login when the access token nears its
+ * expiry. 401 with "log in again" if the refresh token is invalid, expired,
+ * or already used.
+ */
+router.post('/refresh', async (req, res) => {
+  const body = req.body || {};
+  const refreshToken = asString(body.refreshToken, 'refreshToken', { required: true, maxLength: 4096 });
+
+  let payload;
+  try {
+    payload = jwt.verify(refreshToken, config.jwtSecret);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired refresh token. Please log in again.' });
+  }
+  if (payload.type !== 'refresh') {
+    return res.status(401).json({ error: 'That is not a refresh token.' });
+  }
+
+  const record = await RefreshToken.findOne({ jti: payload.jti });
+  if (!record) {
+    return res.status(401).json({ error: 'Refresh token has already been used or revoked. Please log in again.' });
+  }
+
+  const user = await User.findById(payload.sub);
+  if (!user) {
+    await RefreshToken.deleteOne({ jti: payload.jti });
+    return res.status(401).json({ error: 'Account no longer exists.' });
+  }
+
+  await RefreshToken.deleteOne({ jti: payload.jti }); // rotate — this one is now spent
+  const tokens = await issueTokens(user._id);
+  res.json(tokens);
+});
+
+/**
  * POST /api/auth/logout
  * Auth: Bearer token (the one being logged out).
+ * Body (optional): { refreshToken } — also revokes that refresh token so a
+ * full sign-out kills both, not just the access token.
  * Actually invalidates this JWT server-side (adds its jti to a revocation
  * list until it would have expired anyway) — not just a client-side
  * "forget the token" no-op. Any further request with this same token gets
@@ -405,6 +467,14 @@ router.post('/logout', requireAuth, async (req, res) => {
 
   if (decoded?.jti && decoded?.exp) {
     await RevokedToken.create({ jti: decoded.jti, expires_at: new Date(decoded.exp * 1000) }).catch(() => {});
+  }
+
+  const bodyRefreshToken = req.body?.refreshToken;
+  if (bodyRefreshToken) {
+    const refreshPayload = jwt.decode(bodyRefreshToken);
+    if (refreshPayload?.jti) {
+      await RefreshToken.deleteOne({ jti: refreshPayload.jti }).catch(() => {});
+    }
   }
 
   res.json({ success: true, message: 'Logged out. This token is no longer valid.' });

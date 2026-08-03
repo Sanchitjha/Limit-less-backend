@@ -303,6 +303,58 @@ await check('logout revokes the token — further requests with it are rejected'
   assert.equal(stillWorks.status, 200);
 });
 
+await check('login returns a refreshToken; /refresh exchanges it and rotates it', async () => {
+  const loginRes = await api('POST', '/api/auth/login', {
+    body: { email: 'test.user@example.com', password: 'ResetPass123' },
+  });
+  assert.equal(loginRes.status, 200);
+  assert.ok(loginRes.data.refreshToken, 'login should return a refreshToken');
+  const firstRefreshToken = loginRes.data.refreshToken;
+
+  const refreshed = await api('POST', '/api/auth/refresh', { body: { refreshToken: firstRefreshToken } });
+  assert.equal(refreshed.status, 200);
+  assert.ok(refreshed.data.token);
+  assert.ok(refreshed.data.refreshToken);
+  assert.notEqual(refreshed.data.refreshToken, firstRefreshToken, 'refresh token should rotate');
+
+  // The new access token actually works.
+  const check1 = await api('GET', `/api/users/${userId}`, { token: refreshed.data.token });
+  assert.equal(check1.status, 200);
+
+  // The OLD refresh token was consumed by rotation — reusing it must fail.
+  const reused = await api('POST', '/api/auth/refresh', { body: { refreshToken: firstRefreshToken } });
+  assert.equal(reused.status, 401);
+
+  // The NEW refresh token still works exactly once more.
+  const secondRefresh = await api('POST', '/api/auth/refresh', { body: { refreshToken: refreshed.data.refreshToken } });
+  assert.equal(secondRefresh.status, 200);
+});
+
+await check('/refresh rejects a garbage or non-refresh token', async () => {
+  const garbage = await api('POST', '/api/auth/refresh', { body: { refreshToken: 'not-a-real-token' } });
+  assert.equal(garbage.status, 401);
+
+  // A regular access token is not a refresh token, even though it's validly signed.
+  const wrongType = await api('POST', '/api/auth/refresh', { body: { refreshToken: userToken } });
+  assert.equal(wrongType.status, 401);
+});
+
+await check('logout also revokes a refresh token passed in the body', async () => {
+  const loginRes = await api('POST', '/api/auth/login', {
+    body: { email: 'test.user@example.com', password: 'ResetPass123' },
+  });
+  const { token: disposableToken, refreshToken: disposableRefresh } = loginRes.data;
+
+  const out = await api('POST', '/api/auth/logout', {
+    token: disposableToken,
+    body: { refreshToken: disposableRefresh },
+  });
+  assert.equal(out.status, 200);
+
+  const afterLogout = await api('POST', '/api/auth/refresh', { body: { refreshToken: disposableRefresh } });
+  assert.equal(afterLogout.status, 401);
+});
+
 // ── Social sign-in (Google / Apple) ─────────────────────────────────────────
 
 await check('POST /api/auth/google rejects a garbage token', async () => {
