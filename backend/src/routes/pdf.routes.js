@@ -1,11 +1,26 @@
 import { Router } from 'express';
-import { generateModelPdf } from '../services/modelService.js';
-import { assert } from '../middleware/validate.js';
+import { generateModelPdf, assertValidAnalysis } from '../services/modelService.js';
 
 const router = Router();
 
 const sendPdf = async (res, analysis, brand, teaser) => {
-  const buffer = await generateModelPdf(analysis, brand, { teaser });
+  let buffer;
+  try {
+    buffer = await generateModelPdf(analysis, brand, { teaser });
+  } catch (err) {
+    console.error(`[pdf] ${teaser ? 'teaser' : 'full'} PDF generation failed:`, err.message);
+
+    // Surface a helpful error instead of a generic 500
+    const isUnreachable = /could not reach|ECONNREFUSED|ENOTFOUND|timeout/i.test(err.message);
+    const status = isUnreachable ? 502 : 500;
+    return res.status(status).json({
+      error: isUnreachable
+        ? 'The report generation service is currently unreachable. Please try again later.'
+        : 'PDF generation failed. Make sure the "analysis" body is the full, unmodified object returned by /api/v1/analyze.',
+      detail: err.message,
+    });
+  }
+
   const fileName = teaser
     ? `Limitless_Cognitive_Teaser_${new Date().toISOString().split('T')[0]}.pdf`
     : `Limitless_Cognitive_Report_${new Date().toISOString().split('T')[0]}.pdf`;
@@ -26,7 +41,7 @@ const sendPdf = async (res, analysis, brand, teaser) => {
  */
 router.post('/generate-pdf', async (req, res) => {
   const { analysis, brand } = req.body || {};
-  assert(analysis && typeof analysis === 'object', 'analysis is required', ['analysis']);
+  assertValidAnalysis(analysis);
   await sendPdf(res, analysis, brand, false);
 });
 
@@ -37,7 +52,7 @@ router.post('/generate-pdf', async (req, res) => {
  */
 router.post('/generate-teaser-pdf', async (req, res) => {
   const { analysis, brand } = req.body || {};
-  assert(analysis && typeof analysis === 'object', 'analysis is required', ['analysis']);
+  assertValidAnalysis(analysis);
   await sendPdf(res, analysis, brand, true);
 });
 

@@ -10,8 +10,27 @@
  */
 
 import { config } from '../config.js';
+import { assert } from '../middleware/validate.js';
 
 const REQUEST_TIMEOUT_MS = 120_000;
+
+// Exactly the `required` fields of the model's own AnalyzeResponse schema
+// (see {modelServiceUrl}/openapi.json). Checking these ourselves means a
+// caller who pastes a placeholder or a hand-built partial object gets an
+// immediate, specific 422 instead of a round trip to the model service that
+// ends in an opaque 500.
+const REQUIRED_ANALYSIS_FIELDS = ['assessmentId', 'overall', 'domains', 'lifestyleImpacts', 'cognitiveAge', 'charts'];
+
+/** Throws a 422 ValidationError if `analysis` isn't a real /analyze response. */
+export function assertValidAnalysis(analysis) {
+  assert(analysis && typeof analysis === 'object', 'analysis is required', ['analysis']);
+  const missing = REQUIRED_ANALYSIS_FIELDS.filter((field) => !(field in analysis));
+  assert(
+    missing.length === 0,
+    `analysis is missing required field(s): ${missing.join(', ')}. Paste the FULL, unmodified object returned by /api/v1/analyze — not a placeholder or a partially-built object.`,
+    ['analysis']
+  );
+}
 
 /**
  * @param {object} analysis - the report JSON produced by the model's /analyze endpoint

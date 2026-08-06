@@ -4,7 +4,7 @@ import { User } from '../db/models/User.js';
 import { Assessment, sanitizeAssessment } from '../db/models/Assessment.js';
 import { requireDb, requireSelfOrAdmin } from '../middleware/auth.js';
 import { assert } from '../middleware/validate.js';
-import { generateModelPdf } from '../services/modelService.js';
+import { generateModelPdf, assertValidAnalysis } from '../services/modelService.js';
 import { savePdf, buildPublicPdfUrl } from '../services/fileStorage.js';
 import { sendPdfEmail } from '../services/emailService.js';
 
@@ -30,7 +30,7 @@ router.post('/:userId/pdf', requireSelfOrAdmin('userId'), async (req, res) => {
   assert(mongoose.isValidObjectId(userId), 'userId must be a valid id', ['userId']);
 
   const body = req.body || {};
-  assert(body.analysis && typeof body.analysis === 'object', 'analysis is required', ['analysis']);
+  assertValidAnalysis(body.analysis);
   const teaser = body.teaser === true;
 
   const user = await User.findById(userId);
@@ -65,7 +65,20 @@ router.post('/:userId/pdf', requireSelfOrAdmin('userId'), async (req, res) => {
     if (!assessment) assessment = new Assessment({ user_id: userId, report_json: body.analysis });
   }
 
-  const buffer = await generateModelPdf(body.analysis, body.brand, { teaser });
+  let buffer;
+  try {
+    buffer = await generateModelPdf(body.analysis, body.brand, { teaser });
+  } catch (err) {
+    console.error(`[reports] PDF generation failed for user ${userId}:`, err.message);
+    const isUnreachable = /could not reach|ECONNREFUSED|ENOTFOUND|timeout/i.test(err.message);
+    const status = isUnreachable ? 502 : 500;
+    return res.status(status).json({
+      error: isUnreachable
+        ? 'The report generation service is currently unreachable. Please try again later.'
+        : 'PDF generation failed. Make sure the "analysis" body is the full, unmodified object returned by /api/v1/analyze.',
+      detail: err.message,
+    });
+  }
 
   // Filename is keyed to the specific assessment (not the current date) so
   // two assessments generated the same day never collide/overwrite in GridFS.

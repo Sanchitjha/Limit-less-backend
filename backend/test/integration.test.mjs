@@ -61,6 +61,8 @@ process.env.SMTP_PASS = '';
 process.env.NODE_ENV = 'test';
 process.env.GOOGLE_CLIENT_IDS = 'test-google-client-id';
 process.env.APPLE_CLIENT_IDS = 'test-apple-client-id';
+// Never hit real Stripe from tests, regardless of what .env has locally.
+process.env.STRIPE_SECRET_KEY = '';
 
 // Stub Google's real network verification with a fake payload passed straight
 // through as the "idToken" (JSON string) — keeps the test offline while still
@@ -565,6 +567,16 @@ await check('POST /api/v1/generate-pdf proxies to the model service', async () =
   assert.ok(r.contentType.includes('application/pdf'));
   assert.ok(Buffer.from(r.data).subarray(0, 5).toString() === '%PDF-');
   assert.equal(modelServiceCallCount, callsBefore + 1, 'must call the model service, not generate locally');
+});
+
+await check('POST /api/v1/generate-pdf rejects a placeholder/incomplete analysis with 422, never calling the model', async () => {
+  const callsBefore = modelServiceCallCount;
+  const r = await api('POST', '/api/v1/generate-pdf', {
+    body: { analysis: { '...': 'paste report object from /api/v1/analyze' } },
+  });
+  assert.equal(r.status, 422);
+  assert.ok(r.data.detail[0].msg.includes('missing required field'));
+  assert.equal(modelServiceCallCount, callsBefore, 'must fail fast, never reach the model service');
 });
 
 await check('POST /api/reports/:userId/pdf rejects non-paid users for full reports (403)', async () => {
