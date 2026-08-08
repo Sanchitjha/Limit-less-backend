@@ -984,7 +984,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"analysis\": { \"...\": \"paste object from /api/v1/analyze\" },\n  \"assessmentId\": \"{{assessmentId}}\",\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" },\n  \"teaser\": false,\n  \"sendEmail\": false\n}"
+              "raw": "{\n  \"assessmentId\": \"{{assessmentId}}\",\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" },\n  \"teaser\": false,\n  \"sendEmail\": false\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/reports/{{userId}}/pdf",
@@ -998,7 +998,7 @@
                 "pdf"
               ]
             },
-            "description": "Recommended client flow: Generates PDF via model service, stores file in MongoDB GridFS, links public URL to assessment record, and optionally emails link.\nNote: Server enforces paywall when `teaser: false` (requires user `payment_status: 'paid'`). Set `teaser: true` for free preview.\nanalysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts). Since 6 Aug 2026 this backend validates that shape itself and fails fast with 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } if any are missing — e.g. a placeholder/partial object — instead of forwarding to the model service and getting back an opaque 500."
+            "description": "Recommended client flow: Generates PDF via model service, stores file in MongoDB GridFS, links public URL to assessment record, and optionally emails link.\nNote: Server enforces paywall when `teaser: false` (requires user `payment_status: 'paid'`). Set `teaser: true` for free preview.\n\nanalysis is OPTIONAL since 7 Aug 2026 — if this assessmentId already has a stored report_json (from an earlier /analyze auto-save or a POST /api/assessments call, e.g. via \"Create Assessment Record\" in Assessments (storage), or the auto-persist behavior of \"Analyze Responses & Auto-Persist (Node Backend)\"), that is used automatically. You do NOT need to re-paste the full analyze() object on every PDF call, as shown in the body above.\n\nOnly pass `analysis` explicitly if you want to override/refresh what is already stored for this assessment. If passed, it must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts) — an incomplete/placeholder object gets an immediate 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } instead of an opaque 500.\n\nIf NEITHER a stored report_json nor a passed analysis is available, this also returns that same 422."
           }
         },
         {

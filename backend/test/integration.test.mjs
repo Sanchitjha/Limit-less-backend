@@ -613,6 +613,16 @@ await check('POST /api/reports/:userId/pdf stores PDF from the model service on 
   pdfUrl = new URL(r.data.pdfUrl);
 });
 
+await check('POST /api/reports/:userId/pdf works with just assessmentId — no analysis needed once stored', async () => {
+  const callsBefore = modelServiceCallCount;
+  const r = await api('POST', `/api/reports/${userId}/pdf`, {
+    token: userToken,
+    body: { assessmentId: firstAssessmentId, teaser: true }, // no `analysis` — must reuse the stored report_json
+  });
+  assert.equal(r.status, 201);
+  assert.equal(modelServiceCallCount, callsBefore + 1, 'must still reach the model service using the stored analysis');
+});
+
 await check('multiple assessments never collide — each keeps its own PDF', async () => {
   const second = await api('POST', `/api/reports/${userId}/pdf`, {
     token: userToken,

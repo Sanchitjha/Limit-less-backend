@@ -18,10 +18,15 @@ router.use(requireDb);
  * specific assessment, saves the public URL on that assessment, and
  * optionally emails the link.
  *
- * Body: { analysis: <report JSON>, assessmentId?, brand?, teaser?: boolean, sendEmail?: boolean }
+ * Body: { analysis?: <report JSON>, assessmentId?, brand?, teaser?: boolean, sendEmail?: boolean }
  *   - assessmentId selects which assessment this PDF belongs to (required to
  *     support users with multiple assessments — omitting it falls back to
  *     the user's latest assessment for backward compatibility).
+ *   - `analysis` is now OPTIONAL: if the selected assessment already has a
+ *     stored `report_json` (from an earlier /analyze auto-save or a POST
+ *     /api/assessments call), that's used automatically — the client
+ *     doesn't have to re-paste the full analysis object on every PDF call.
+ *     Pass `analysis` explicitly only to override/refresh what's stored.
  * Response: { pdfUrl, fileName, assessment }
  * Auth: the user themself, or an admin.
  */
@@ -30,7 +35,6 @@ router.post('/:userId/pdf', requireSelfOrAdmin('userId'), async (req, res) => {
   assert(mongoose.isValidObjectId(userId), 'userId must be a valid id', ['userId']);
 
   const body = req.body || {};
-  assertValidAnalysis(body.analysis);
   const teaser = body.teaser === true;
 
   const user = await User.findById(userId);
@@ -65,9 +69,14 @@ router.post('/:userId/pdf', requireSelfOrAdmin('userId'), async (req, res) => {
     if (!assessment) assessment = new Assessment({ user_id: userId, report_json: body.analysis });
   }
 
+  // Prefer an explicitly-passed analysis (lets a caller refresh/override),
+  // otherwise fall back to whatever this assessment already has stored.
+  const analysis = body.analysis ?? assessment.report_json;
+  assertValidAnalysis(analysis);
+
   let buffer;
   try {
-    buffer = await generateModelPdf(body.analysis, body.brand, { teaser });
+    buffer = await generateModelPdf(analysis, body.brand, { teaser });
   } catch (err) {
     console.error(`[reports] PDF generation failed for user ${userId}:`, err.message);
     const isUnreachable = /could not reach|ECONNREFUSED|ENOTFOUND|timeout/i.test(err.message);
@@ -91,7 +100,7 @@ router.post('/:userId/pdf', requireSelfOrAdmin('userId'), async (req, res) => {
 
   // Full reports "own" pdf_url on their assessment; teasers are never stored there.
   if (!teaser) assessment.pdf_url = pdfUrl;
-  if (!assessment.report_json) assessment.report_json = body.analysis;
+  if (!assessment.report_json) assessment.report_json = analysis;
   await assessment.save();
 
   if (body.sendEmail === true) {
