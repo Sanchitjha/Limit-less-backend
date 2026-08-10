@@ -59,6 +59,11 @@
       "key": "userOtp",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "questionItemIds",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -715,11 +720,45 @@
               ]
             },
             "description": "Generates assessment questions based on age & gender. Returns { assessmentId, sections, meta: { source, totalQuestions, scale } }."
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('assessmentId', json.assessmentId);",
+                  "  const ids = json.sections.flatMap(s => s.items.map(it => it.id));",
+                  "  pm.collectionVariables.set('questionItemIds', JSON.stringify(ids));",
+                  "  console.log('Captured', ids.length, 'question item IDs for the next request.');",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Analyze Responses & Auto-Persist (Node Backend)",
           "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const raw = pm.collectionVariables.get('questionItemIds');",
+                  "if (raw) {",
+                  "  const ids = JSON.parse(raw);",
+                  "  const responses = ids.map((id, i) => ({ itemId: id, value: i % 5 }));",
+                  "  const body = JSON.parse(pm.request.body.raw);",
+                  "  body.assessmentId = pm.collectionVariables.get('assessmentId');",
+                  "  body.responses = responses;",
+                  "  pm.request.body.raw = JSON.stringify(body, null, 2);",
+                  "}"
+                ]
+              }
+            },
             {
               "listen": "test",
               "script": {
@@ -758,7 +797,7 @@
                 "analyze"
               ]
             },
-            "description": "Calculates cognitive scores & risk metrics. If valid `userId` is supplied in the request body, the assessment is automatically saved to MongoDB and `assessmentRecordId` is returned."
+            "description": "Calculates cognitive scores & risk metrics. If valid `userId` is supplied in the request body, the assessment is automatically saved to MongoDB and `assessmentRecordId` is returned.\n\nFully automatic when run right after \"Generate Questions (Node Backend)\" in this same collection — a pre-request script builds a real, valid responses[] array from that response's question IDs, and fills in assessmentId. No manual editing needed. Its own test script then saves the auto-persisted assessmentRecordId into {{assessmentId}} for the next step."
           }
         },
         {
@@ -769,11 +808,15 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userToken}}"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"analysis\": { \"...\": \"paste report object from /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"assessmentId\": \"{{assessmentId}}\",\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/generate-pdf",
@@ -786,7 +829,7 @@
                 "generate-pdf"
               ]
             },
-            "description": "Proxies PDF generation to the AI model service and returns raw PDF binary. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts). Since 6 Aug 2026 this backend validates that shape itself and fails fast with 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } if any are missing — e.g. a placeholder/partial object — instead of forwarding to the model service and getting back an opaque 500."
+            "description": "TWO ways to call this — pick one:\n1. RECOMMENDED (as shown in the body above): { userId, assessmentId, brand? } — uses the assessment's already-stored report_json, no need to paste analyze() output. Requires Authorization: Bearer <token> for that same user (or an admin) — this path reads a specific person's data, so it can't be anonymous. 401 if no/invalid token, 403 if it's not your own userId (and you're not admin), 404 if that assessmentId doesn't belong to that user.\n2. Anonymous / stateless: { analysis, brand? } — the original behavior, unchanged, no auth needed. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts) — an incomplete/placeholder object gets an immediate 422 listing exactly what's missing.\n\nReturns raw full report PDF binary."
           }
         },
         {
@@ -797,11 +840,15 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{userToken}}"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"analysis\": { \"...\": \"paste report object from /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"assessmentId\": \"{{assessmentId}}\",\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/generate-teaser-pdf",
@@ -814,7 +861,7 @@
                 "generate-teaser-pdf"
               ]
             },
-            "description": "Generates free/preview teaser PDF binary with locked sections. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts). Since 6 Aug 2026 this backend validates that shape itself and fails fast with 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } if any are missing — e.g. a placeholder/partial object — instead of forwarding to the model service and getting back an opaque 500."
+            "description": "TWO ways to call this — pick one:\n1. RECOMMENDED (as shown in the body above): { userId, assessmentId, brand? } — uses the assessment's already-stored report_json, no need to paste analyze() output. Requires Authorization: Bearer <token> for that same user (or an admin) — this path reads a specific person's data, so it can't be anonymous. 401 if no/invalid token, 403 if it's not your own userId (and you're not admin), 404 if that assessmentId doesn't belong to that user.\n2. Anonymous / stateless: { analysis, brand? } — the original behavior, unchanged, no auth needed. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts) — an incomplete/placeholder object gets an immediate 422 listing exactly what's missing.\n\nReturns raw teaser PDF binary."
           }
         }
       ]

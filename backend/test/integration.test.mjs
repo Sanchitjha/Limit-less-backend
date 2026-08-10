@@ -579,6 +579,44 @@ await check('POST /api/v1/generate-pdf rejects a placeholder/incomplete analysis
   assert.equal(modelServiceCallCount, callsBefore, 'must fail fast, never reach the model service');
 });
 
+await check('POST /api/v1/generate-teaser-pdf works with userId+assessmentId instead of analysis', async () => {
+  const callsBefore = modelServiceCallCount;
+  const r = await api('POST', '/api/v1/generate-teaser-pdf', {
+    token: userToken,
+    body: { userId, assessmentId: firstAssessmentId },
+  });
+  assert.equal(r.status, 200);
+  assert.ok(r.contentType.includes('application/pdf'));
+  assert.equal(modelServiceCallCount, callsBefore + 1, 'must call the model service using the stored analysis');
+});
+
+await check('POST /api/v1/generate-pdf with userId+assessmentId requires auth (401 unauthenticated)', async () => {
+  const r = await api('POST', '/api/v1/generate-pdf', {
+    body: { userId, assessmentId: firstAssessmentId },
+  });
+  assert.equal(r.status, 401);
+});
+
+await check('POST /api/v1/generate-pdf with userId+assessmentId rejects a different user (403)', async () => {
+  const other = await api('POST', '/api/auth/register', {
+    body: { name: 'Pdf Snoop', email: 'pdf.snoop@example.com', password: 'PlainPass123' },
+  });
+  assert.equal(other.status, 201);
+  const r = await api('POST', '/api/v1/generate-pdf', {
+    token: other.data.token,
+    body: { userId, assessmentId: firstAssessmentId },
+  });
+  assert.equal(r.status, 403);
+});
+
+await check('POST /api/v1/generate-pdf with userId+assessmentId 404s for a non-existent assessment', async () => {
+  const r = await api('POST', '/api/v1/generate-pdf', {
+    token: userToken,
+    body: { userId, assessmentId: '000000000000000000000000' },
+  });
+  assert.equal(r.status, 404);
+});
+
 await check('POST /api/reports/:userId/pdf rejects non-paid users for full reports (403)', async () => {
   await User.findByIdAndUpdate(userId, { payment_status: 'pending' });
   const blocked = await api('POST', `/api/reports/${userId}/pdf`, {
@@ -742,8 +780,8 @@ await check('GET /api/admin/users lists users with assessments + credentials', a
   const r = await api('GET', '/api/admin/users', { token: adminToken });
   assert.equal(r.status, 200);
   // main test user + Cooldown + Own Pw + social.google + social.apple + Apple Link Target
-  // + Other (403 test) + Other Owner (404 assessmentId test)
-  assert.equal(r.data.length, 8);
+  // + Pdf Snoop (403 test) + Other (403 test) + Other Owner (404 assessmentId test)
+  assert.equal(r.data.length, 9);
   const me = r.data.find((u) => u.id === userId);
   assert.ok(me.assessments.length >= 2);
   assert.ok(me.report_json, 'latest report mirrored onto user');
@@ -760,7 +798,7 @@ await check('GET /api/admin/users/:id returns detail', async () => {
 await check('GET /api/admin/stats aggregates correctly', async () => {
   const r = await api('GET', '/api/admin/stats', { token: adminToken });
   assert.equal(r.status, 200);
-  assert.equal(r.data.total_users, 8);
+  assert.equal(r.data.total_users, 9);
   assert.equal(r.data.paid_users, 1);
   assert.equal(r.data.mrr, 19);
   assert.ok(r.data.completed_assessments >= 2);
