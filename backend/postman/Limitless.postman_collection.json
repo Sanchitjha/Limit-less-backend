@@ -719,61 +719,13 @@
                 "generate-questions"
               ]
             },
-            "description": "Generates assessment questions based on age & gender. Returns { assessmentId, sections, meta: { source, totalQuestions, scale } }."
+            "description": "⚠️ LEGACY / NOT PDF-COMPATIBLE: this hits the Node backend's OWN simplified local scoring engine (a separate, older implementation), NOT the real AI model. As of ~11 Aug 2026 the real AI model changed its domains field format, and any analysis produced by THIS local engine still uses the old format — the current PDF generator (\"✅ Generate + Store Report PDF\") will FAIL on it with an opaque 500.\n\n👉 Use \"Generate Questions (Direct Model)\" + \"Analyze Responses (Direct Model)\" instead — those call the real AI model and are kept fully in sync with it. This request is left here for reference only.\n\n---\n\nGenerates assessment questions based on age & gender. Returns { assessmentId, sections, meta: { source, totalQuestions, scale } }."
           },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const json = pm.response.json();",
-                  "  pm.collectionVariables.set('assessmentId', json.assessmentId);",
-                  "  const ids = json.sections.flatMap(s => s.items.map(it => it.id));",
-                  "  pm.collectionVariables.set('questionItemIds', JSON.stringify(ids));",
-                  "  console.log('Captured', ids.length, 'question item IDs for the next request.');",
-                  "}"
-                ]
-              }
-            }
-          ]
+          "event": []
         },
         {
           "name": "Analyze Responses & Auto-Persist (Node Backend)",
-          "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const raw = pm.collectionVariables.get('questionItemIds');",
-                  "if (raw) {",
-                  "  const ids = JSON.parse(raw);",
-                  "  const responses = ids.map((id, i) => ({ itemId: id, value: i % 5 }));",
-                  "  const body = JSON.parse(pm.request.body.raw);",
-                  "  body.assessmentId = pm.collectionVariables.get('assessmentId');",
-                  "  body.responses = responses;",
-                  "  pm.request.body.raw = JSON.stringify(body, null, 2);",
-                  "}"
-                ]
-              }
-            },
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const json = pm.response.json();",
-                  "  if (json.assessmentRecordId) {",
-                  "    pm.collectionVariables.set('assessmentId', json.assessmentRecordId);",
-                  "  }",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ],
+          "event": [],
           "request": {
             "method": "POST",
             "header": [
@@ -797,7 +749,7 @@
                 "analyze"
               ]
             },
-            "description": "Calculates cognitive scores & risk metrics. If valid `userId` is supplied in the request body, the assessment is automatically saved to MongoDB and `assessmentRecordId` is returned.\n\nFully automatic when run right after \"Generate Questions (Node Backend)\" in this same collection — a pre-request script builds a real, valid responses[] array from that response's question IDs, and fills in assessmentId. No manual editing needed. Its own test script then saves the auto-persisted assessmentRecordId into {{assessmentId}} for the next step."
+            "description": "⚠️ LEGACY / NOT PDF-COMPATIBLE: this hits the Node backend's OWN simplified local scoring engine (a separate, older implementation), NOT the real AI model. As of ~11 Aug 2026 the real AI model changed its domains field format, and any analysis produced by THIS local engine still uses the old format — the current PDF generator (\"✅ Generate + Store Report PDF\") will FAIL on it with an opaque 500.\n\n👉 Use \"Generate Questions (Direct Model)\" + \"Analyze Responses (Direct Model)\" instead — those call the real AI model and are kept fully in sync with it. This request is left here for reference only.\n\n---\n\nCalculates cognitive scores & risk metrics. If valid `userId` is supplied in the request body, the assessment is automatically saved to MongoDB and `assessmentRecordId` is returned.\n\nFully automatic when run right after \"Generate Questions (Node Backend)\" in this same collection — a pre-request script builds a real, valid responses[] array from that response's question IDs, and fills in assessmentId. No manual editing needed. Its own test script then saves the auto-persisted assessmentRecordId into {{assessmentId}} for the next step."
           }
         },
         {
@@ -896,7 +848,24 @@
               ]
             },
             "description": "Direct call to model service for question generation."
-          }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('assessmentId', json.assessmentId);",
+                  "  const ids = json.sections.flatMap(s => s.items.map(it => it.id));",
+                  "  pm.collectionVariables.set('questionItemIds', JSON.stringify(ids));",
+                  "  console.log('Captured', ids.length, 'question item IDs.');",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Analyze Responses (Direct Model)",
@@ -923,64 +892,56 @@
                 "analyze"
               ]
             },
-            "description": "Direct call to model service to compute cognitive scores and analysis."
-          }
-        },
-        {
-          "name": "Generate Full PDF (Direct Model)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
+            "description": "Direct call to model service to compute cognitive scores and analysis.\n\nFully automatic when run right after \"Generate Questions (Direct Model)\" in this same collection. On success, its test script automatically saves the real analysis to /api/assessments and updates {{assessmentId}} to the resulting DB id — so \"✅ Generate + Store Report PDF\" right after this will just work, with a genuinely PDF-compatible analysis object."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const raw = pm.collectionVariables.get('questionItemIds');",
+                  "if (raw) {",
+                  "  const ids = JSON.parse(raw);",
+                  "  const responses = ids.map((id, i) => ({ itemId: id, value: i % 5 }));",
+                  "  const body = JSON.parse(pm.request.body.raw);",
+                  "  body.assessmentId = pm.collectionVariables.get('assessmentId');",
+                  "  body.responses = responses;",
+                  "  pm.request.body.raw = JSON.stringify(body, null, 2);",
+                  "}"
+                ]
               }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"analysis\": { \"...\": \"paste object returned by /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
             },
-            "url": {
-              "raw": "{{modelUrl}}/api/v1/generate-pdf",
-              "host": [
-                "{{modelUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "generate-pdf"
-              ]
-            },
-            "description": "Direct call to model service to compile PDF binary from analysis object. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts). This call goes straight to the AI model service (no pre-validation on our side) — an incomplete/placeholder analysis object will fail there with a 500. Prefer the \"(Node Backend)\" versions of this request, which validate the shape first and give a much clearer 422 error."
-          }
-        },
-        {
-          "name": "Generate Teaser PDF (Direct Model)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const analysis = pm.response.json();",
+                  "  const userId = pm.collectionVariables.get('userId');",
+                  "  const baseUrl = pm.collectionVariables.get('baseUrl');",
+                  "  const userToken = pm.collectionVariables.get('userToken');",
+                  "  pm.sendRequest({",
+                  "    url: baseUrl + '/api/assessments',",
+                  "    method: 'POST',",
+                  "    header: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + userToken },",
+                  "    body: { mode: 'raw', raw: JSON.stringify({ user_id: userId, report_json: analysis }) }",
+                  "  }, (err, res) => {",
+                  "    if (err) { console.error('Auto-persist to /api/assessments failed:', err); return; }",
+                  "    const saved = res.json();",
+                  "    if (saved && saved.id) {",
+                  "      pm.collectionVariables.set('assessmentId', saved.id);",
+                  "      console.log('Real, PDF-compatible analysis auto-saved. assessmentId ->', saved.id);",
+                  "    } else {",
+                  "      console.error('Auto-persist response missing id:', JSON.stringify(saved));",
+                  "    }",
+                  "  });",
+                  "}"
+                ]
               }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"analysis\": { \"...\": \"paste object returned by /api/v1/analyze\" },\n  \"brand\": { \"primaryColor\": \"#3B82F6\", \"accentColor\": \"#6366F1\" }\n}"
-            },
-            "url": {
-              "raw": "{{modelUrl}}/api/v1/generate-teaser-pdf",
-              "host": [
-                "{{modelUrl}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "generate-teaser-pdf"
-              ]
-            },
-            "description": "Direct call to model service for free preview teaser PDF binary. analysis must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts). This call goes straight to the AI model service (no pre-validation on our side) — an incomplete/placeholder analysis object will fail there with a 500. Prefer the \"(Node Backend)\" versions of this request, which validate the shape first and give a much clearer 422 error."
-          }
+            }
+          ]
         },
         {
           "name": "Longitudinal Analysis (Direct Model)",
@@ -1016,7 +977,7 @@
       "name": "Reports & Files",
       "item": [
         {
-          "name": "Generate + Store Report PDF (recommended flow)",
+          "name": "✅ Generate + Store Report PDF — USE THIS ONE",
           "request": {
             "method": "POST",
             "header": [
@@ -1045,7 +1006,7 @@
                 "pdf"
               ]
             },
-            "description": "Recommended client flow: Generates PDF via model service, stores file in MongoDB GridFS, links public URL to assessment record, and optionally emails link.\nNote: Server enforces paywall when `teaser: false` (requires user `payment_status: 'paid'`). Set `teaser: true` for free preview.\n\nanalysis is OPTIONAL since 7 Aug 2026 — if this assessmentId already has a stored report_json (from an earlier /analyze auto-save or a POST /api/assessments call, e.g. via \"Create Assessment Record\" in Assessments (storage), or the auto-persist behavior of \"Analyze Responses & Auto-Persist (Node Backend)\"), that is used automatically. You do NOT need to re-paste the full analyze() object on every PDF call, as shown in the body above.\n\nOnly pass `analysis` explicitly if you want to override/refresh what is already stored for this assessment. If passed, it must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts) — an incomplete/placeholder object gets an immediate 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } instead of an opaque 500.\n\nIf NEITHER a stored report_json nor a passed analysis is available, this also returns that same 422."
+            "description": "THIS IS STEP 1 OF 2 — it returns a pdfUrl LINK, not the PDF file itself. To actually get the PDF bytes (for download/display in the app), you must then call \"Download Stored PDF (public)\" below using that pdfUrl. Do not stop after this call expecting a file — it only generates and stores the report server-side.\n\n👉 THIS is the one endpoint the app should call to get a PDF. Nothing else needed beyond userId + assessmentId — no analysis data, no manual copying.\n\nRecommended client flow: Generates PDF via model service, stores file in MongoDB GridFS, links public URL to assessment record, and optionally emails link.\nNote: Server enforces paywall when `teaser: false` (requires user `payment_status: 'paid'`). Set `teaser: true` for free preview.\n\nanalysis is OPTIONAL since 7 Aug 2026 — if this assessmentId already has a stored report_json (from an earlier /analyze auto-save or a POST /api/assessments call, e.g. via \"Create Assessment Record\" in Assessments (storage), or the auto-persist behavior of \"Analyze Responses & Auto-Persist (Node Backend)\"), that is used automatically. You do NOT need to re-paste the full analyze() object on every PDF call, as shown in the body above.\n\nOnly pass `analysis` explicitly if you want to override/refresh what is already stored for this assessment. If passed, it must be the FULL object returned by /api/v1/analyze (needs at minimum: assessmentId, overall, domains, lifestyleImpacts, cognitiveAge, charts) — an incomplete/placeholder object gets an immediate 422 { detail: [{ msg: \"analysis is missing required field(s): ...\" }] } instead of an opaque 500.\n\nIf NEITHER a stored report_json nor a passed analysis is available, this also returns that same 422."
           }
         },
         {
@@ -1065,7 +1026,7 @@
                 "example.pdf"
               ]
             },
-            "description": "Public route. Streams stored PDF binary from GridFS."
+            "description": "THIS IS STEP 2 OF 2 — call this AFTER \"✅ Generate + Store Report PDF\" above, using the exact pdfUrl from that response (replace the example filename below with the real one). Public route, no Authorization header needed. Streams the actual PDF binary from GridFS — this is what the app should save/display as the downloaded file."
           }
         },
         {
