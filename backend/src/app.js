@@ -15,6 +15,7 @@ import plansRoutes from './routes/plans.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
 import enquiriesRoutes from './routes/enquiries.routes.js';
 import paymentRoutes from './routes/payment.routes.js';
+import executiveRoutes from './routes/executive.routes.js';
 import { publicFilesRouter, apiFilesRouter } from './routes/files.routes.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
@@ -85,6 +86,7 @@ const health = (req, res) =>
       email: features.email,
       googleSignIn: features.googleSignIn,
       appleSignIn: features.appleSignIn,
+      executiveApi: features.executiveApi,
     },
     timestamp: new Date().toISOString(),
   });
@@ -98,6 +100,7 @@ app.use('/api/v1', pdfRoutes);
 
 // Database-backed REST API (MongoDB)
 app.use('/api/v1/payments', paymentRoutes);
+app.use('/api/v1/executive', executiveRoutes);
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/assessments', assessmentsRoutes);

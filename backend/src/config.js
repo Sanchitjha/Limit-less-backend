@@ -57,6 +57,11 @@ export const config = {
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
   stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
 
+  // Limitless Executive AI Coach — server-to-server only (see
+  // routes/executive.routes.js). Never expose this key to the frontend.
+  executiveApiUrl: (process.env.EXECUTIVE_API_URL || '').replace(/\/+$/, ''),
+  executiveApiKey: process.env.EXECUTIVE_API_KEY || '',
+
   // Optional backend email (Nodemailer / SMTP)
   smtp: {
     host: process.env.SMTP_HOST || '',
@@ -85,6 +90,7 @@ export const features = {
   email: Boolean(config.smtp.host && config.smtp.user),
   googleSignIn: config.googleClientIds.length > 0,
   appleSignIn: config.appleClientIds.length > 0,
+  executiveApi: Boolean(config.executiveApiUrl && config.executiveApiKey),
 };
 
 if (
