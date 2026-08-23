@@ -27,6 +27,14 @@ const CONFIDENTIALITY =
   `Be advised that ${COMPANY} staff will never ask for your account password. ` +
   `If you are not the intended recipient, please delete this message.`;
 
+const SOCIAL_LINKS = [
+  { label: 'Instagram', url: 'https://www.instagram.com/limitlessnet42026/' },
+  { label: 'YouTube', url: 'https://www.youtube.com/@limitlessworld-b2s' },
+  { label: 'X', url: 'https://x.com/home' },
+  { label: 'Get the App', url: 'https://play.google.com/store/apps/details?id=com.app.limitless.app' },
+];
+const SOCIAL_TEXT = `Follow us : ${SOCIAL_LINKS.map((s) => `${s.label} — ${s.url}`).join(' | ')}`;
+
 let transporter = null;
 if (features.email) {
   transporter = nodemailer.createTransport({
@@ -70,10 +78,13 @@ const planLabel = (paymentStatus) => {
 const footerHtml = `
   <hr style="border:none;border-top:1px solid #E2E8F0;margin:24px 0"/>
   <p style="color:#94A3B8;font-size:12px;line-height:1.6;margin:0 0 12px">${CONFIDENTIALITY}</p>
-  <p style="color:#475569;font-size:13px;line-height:1.8;margin:0">
+  <p style="color:#475569;font-size:13px;line-height:1.8;margin:0 0 12px">
     <strong>Company Name:</strong> ${COMPANY}<br/>
     <strong>Support Email:</strong> <a href="mailto:${SUPPORT_EMAIL}" style="color:#3B82F6">${SUPPORT_EMAIL}</a><br/>
     <strong>Feedback:</strong> <a href="${FEEDBACK_URL}" style="color:#3B82F6">${FEEDBACK_URL}</a>
+  </p>
+  <p style="font-size:13px;margin:0">
+    ${SOCIAL_LINKS.map((s) => `<a href="${s.url}" style="color:#3B82F6;text-decoration:none;margin-right:14px">${s.label}</a>`).join('')}
   </p>`;
 
 /**
@@ -152,6 +163,7 @@ ${resetNotice}
     `Company Name : ${COMPANY}`,
     `Support Email : ${SUPPORT_EMAIL}`,
     `Feedback : ${FEEDBACK_URL}`,
+    SOCIAL_TEXT,
   ].join('\n');
 
   return send({
@@ -182,7 +194,7 @@ export const sendPdfEmail = ({ name, email, pdfUrl }) => {
         </div>
       </div>
     </div>`,
-    text: `Your report is ready, ${firstName}!\n\nDownload: ${pdfUrl}\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}`,
+    text: `Your report is ready, ${firstName}!\n\nDownload: ${pdfUrl}\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}\n${SOCIAL_TEXT}`,
   });
 };
 
@@ -213,7 +225,7 @@ export const sendOtpEmail = ({ email, name, otp }) => {
         </div>
       </div>
     </div>`,
-    text: `Hi ${firstName},\n\nYour Limitless verification code is: ${otp}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}`,
+    text: `Hi ${firstName},\n\nYour Limitless verification code is: ${otp}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email.\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}\n${SOCIAL_TEXT}`,
   });
 };
 
@@ -244,7 +256,7 @@ export const sendPasswordResetEmail = ({ email, name, otp }) => {
         </div>
       </div>
     </div>`,
-    text: `Hi ${firstName},\n\nYour Limitless password reset code is: ${otp}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email — your password will not change.\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}`,
+    text: `Hi ${firstName},\n\nYour Limitless password reset code is: ${otp}\n\nIt expires in 10 minutes. If you didn't request this, ignore this email — your password will not change.\n\n${CONFIDENTIALITY}\n\nCompany Name : ${COMPANY}\nSupport Email : ${SUPPORT_EMAIL}\nFeedback : ${FEEDBACK_URL}\n${SOCIAL_TEXT}`,
   });
 };
 
