@@ -27,13 +27,22 @@ const CONFIDENTIALITY =
   `Be advised that ${COMPANY} staff will never ask for your account password. ` +
   `If you are not the intended recipient, please delete this message.`;
 
-const SOCIAL_LINKS = [
-  { label: 'Instagram', url: 'https://www.instagram.com/limitlessnet42026/' },
-  { label: 'YouTube', url: 'https://www.youtube.com/@limitlessworld-b2s' },
-  { label: 'X', url: 'https://x.com/home' },
-  { label: 'Get the App', url: 'https://play.google.com/store/apps/details?id=com.app.limitless.app' },
+const SOCIAL_PLATFORM_LINKS = [
+  { label: 'Instagram', url: 'https://www.instagram.com/limitlessnet42026/', color: '#E1306C' },
+  { label: 'YouTube', url: 'https://www.youtube.com/@limitlessworld-b2s', color: '#FF0000' },
+  { label: 'X', url: 'https://x.com/home', color: '#0F172A' },
 ];
-const SOCIAL_TEXT = `Follow us : ${SOCIAL_LINKS.map((s) => `${s.label} — ${s.url}`).join(' | ')}`;
+const APP_STORE_URL = 'https://play.google.com/store/apps/details?id=com.app.limitless.app';
+// Google's own officially-hosted badge asset — meant for exactly this (linking
+// out to a Play Store listing), so it's safe to embed directly rather than
+// hosting a copy ourselves.
+const GOOGLE_PLAY_BADGE_URL = 'https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png';
+
+const SOCIAL_TEXT = [
+  'Stay connected:',
+  ...SOCIAL_PLATFORM_LINKS.map((s) => `${s.label} — ${s.url}`),
+  `Get the App — ${APP_STORE_URL}`,
+].join('\n');
 
 let transporter = null;
 if (features.email) {
@@ -75,17 +84,29 @@ const planLabel = (paymentStatus) => {
   }
 };
 
+/** Shared brand header — gradient with a solid-color fallback for Outlook
+ * desktop, which ignores CSS gradients entirely and just uses background-color. */
+const brandHeaderHtml = (subtitle) => `
+  <div style="background-color:#3B82F6;background-image:linear-gradient(135deg,#3B82F6 0%,#6366F1 100%);padding:32px 32px 28px">
+    <h1 style="color:#FFFFFF;font-size:24px;letter-spacing:1px;margin:0;font-weight:800">LIMITLESS</h1>
+    ${subtitle ? `<p style="color:#DBEAFE;font-size:13px;margin:6px 0 0">${subtitle}</p>` : ''}
+  </div>`;
+
 const footerHtml = `
-  <hr style="border:none;border-top:1px solid #E2E8F0;margin:24px 0"/>
-  <p style="color:#94A3B8;font-size:12px;line-height:1.6;margin:0 0 12px">${CONFIDENTIALITY}</p>
-  <p style="color:#475569;font-size:13px;line-height:1.8;margin:0 0 12px">
+  <hr style="border:none;border-top:1px solid #E2E8F0;margin:28px 0 20px"/>
+  <p style="color:#94A3B8;font-size:12px;line-height:1.6;margin:0 0 16px">${CONFIDENTIALITY}</p>
+  <p style="color:#475569;font-size:13px;line-height:1.9;margin:0 0 20px">
     <strong>Company Name:</strong> ${COMPANY}<br/>
-    <strong>Support Email:</strong> <a href="mailto:${SUPPORT_EMAIL}" style="color:#3B82F6">${SUPPORT_EMAIL}</a><br/>
-    <strong>Feedback:</strong> <a href="${FEEDBACK_URL}" style="color:#3B82F6">${FEEDBACK_URL}</a>
+    <strong>Support Email:</strong> <a href="mailto:${SUPPORT_EMAIL}" style="color:#3B82F6;text-decoration:none">${SUPPORT_EMAIL}</a><br/>
+    <strong>Feedback:</strong> <a href="${FEEDBACK_URL}" style="color:#3B82F6;text-decoration:none">${FEEDBACK_URL}</a>
   </p>
-  <p style="font-size:13px;margin:0">
-    ${SOCIAL_LINKS.map((s) => `<a href="${s.url}" style="color:#3B82F6;text-decoration:none;margin-right:14px">${s.label}</a>`).join('')}
-  </p>`;
+  <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:20px;text-align:center">
+    <p style="color:#94A3B8;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:0 0 12px">Stay Connected</p>
+    <p style="margin:0 0 16px">
+      ${SOCIAL_PLATFORM_LINKS.map((s) => `<a href="${s.url}" style="color:${s.color};text-decoration:none;font-size:13px;font-weight:700;margin:0 10px">${s.label}</a>`).join('<span style="color:#CBD5E1">•</span>')}
+    </p>
+    <a href="${APP_STORE_URL}" style="display:inline-block;line-height:0"><img src="${GOOGLE_PLAY_BADGE_URL}" alt="Get it on Google Play" height="46" style="height:46px;width:auto;border:0"/></a>
+  </div>`;
 
 /**
  * Welcome / credentials email sent right after registration.
@@ -115,11 +136,8 @@ export const sendCredentialsEmail = ({ name, email, tempPassword, paymentStatus 
 
   const html = `
   <div style="background:#F8FAFC;padding:24px 0">
-    <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
-      <div style="background:#3B82F6;padding:28px 32px">
-        <h1 style="color:#FFFFFF;font-size:22px;margin:0">LIMITLESS</h1>
-        <p style="color:#DBEAFE;font-size:13px;margin:6px 0 0">Cognitive Wellness Platform</p>
-      </div>
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.06)">
+      ${brandHeaderHtml('Cognitive Wellness Platform')}
       <div style="padding:28px 32px">
         <h2 style="color:#0F172A;font-size:19px;margin:0 0 16px">Welcome ${firstName}!</h2>
         <p style="color:#475569;font-size:14px;line-height:1.7;margin:0 0 12px">${BRAND_STORY_1}</p>
@@ -182,10 +200,8 @@ export const sendPdfEmail = ({ name, email, pdfUrl }) => {
     subject: `Your Cognitive Wellness Report is Ready | ${COMPANY}`,
     html: `
     <div style="background:#F8FAFC;padding:24px 0">
-      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
-        <div style="background:#3B82F6;padding:28px 32px">
-          <h1 style="color:#FFFFFF;font-size:22px;margin:0">LIMITLESS</h1>
-        </div>
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.06)">
+        ${brandHeaderHtml()}
         <div style="padding:28px 32px">
           <h2 style="color:#0F172A;font-size:19px;margin:0 0 12px">Your report is ready, ${firstName}!</h2>
           <p style="color:#475569;font-size:14px;line-height:1.7">Your personalized cognitive wellness report has been generated and is ready to download.</p>
@@ -206,11 +222,8 @@ export const sendOtpEmail = ({ email, name, otp }) => {
     subject: `${otp} is your Limitless verification code`,
     html: `
     <div style="background:#F8FAFC;padding:24px 0">
-      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
-        <div style="background:#3B82F6;padding:28px 32px">
-          <h1 style="color:#FFFFFF;font-size:22px;margin:0">LIMITLESS</h1>
-          <p style="color:#DBEAFE;font-size:13px;margin:6px 0 0">Email Verification</p>
-        </div>
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.06)">
+        ${brandHeaderHtml('Email Verification')}
         <div style="padding:28px 32px">
           <h2 style="color:#0F172A;font-size:19px;margin:0 0 12px">Hi ${firstName},</h2>
           <p style="color:#475569;font-size:14px;line-height:1.7;margin:0 0 20px">
@@ -237,11 +250,8 @@ export const sendPasswordResetEmail = ({ email, name, otp }) => {
     subject: `${otp} is your Limitless password reset code`,
     html: `
     <div style="background:#F8FAFC;padding:24px 0">
-      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden">
-        <div style="background:#3B82F6;padding:28px 32px">
-          <h1 style="color:#FFFFFF;font-size:22px;margin:0">LIMITLESS</h1>
-          <p style="color:#DBEAFE;font-size:13px;margin:6px 0 0">Password Reset</p>
-        </div>
+      <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.06)">
+        ${brandHeaderHtml('Password Reset')}
         <div style="padding:28px 32px">
           <h2 style="color:#0F172A;font-size:19px;margin:0 0 12px">Hi ${firstName},</h2>
           <p style="color:#475569;font-size:14px;line-height:1.7;margin:0 0 20px">
