@@ -16,6 +16,9 @@ import reportsRoutes from './routes/reports.routes.js';
 import enquiriesRoutes from './routes/enquiries.routes.js';
 import paymentRoutes from './routes/payment.routes.js';
 import executiveRoutes from './routes/executive.routes.js';
+import vaultrixRoutes from './vaultrix/vaultrix.routes.js';
+import vigilRoutes from './vigil/vigil.routes.js';
+import vppRoutes from './vpp/vpp.routes.js';
 import { publicFilesRouter, apiFilesRouter } from './routes/files.routes.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
@@ -108,6 +111,9 @@ app.use('/api/admin', adminRoutes); // login inside has its own brute-force limi
 app.use('/api/plans', plansRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/enquiries', generationLimiter, enquiriesRoutes);
+app.use('/api/vaultrix', vaultrixRoutes);
+app.use('/api/vigil', vigilRoutes);
+app.use('/api/vpp', vppRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
