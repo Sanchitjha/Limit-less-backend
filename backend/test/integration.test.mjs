@@ -840,6 +840,149 @@ await check('DELETE /api/admin/users/:id cascades assessments', async () => {
   assert.equal(file.status, 404, 'user PDFs removed from GridFS');
 });
 
+// ── New Module Integration Tests ─────────────────────────────────────────────
+
+await check('Admin Access Requests: submit, list, approve, reject', async () => {
+  const submit = await api('POST', '/api/admin/access-requests', {
+    body: { email: 'newadmin@example.com', name: 'New Admin', notes: 'Need access' },
+  });
+  assert.equal(submit.status, 201);
+  assert.equal(submit.data.request.status, 'pending');
+
+  const list = await api('GET', '/api/admin/access-requests', { token: adminToken });
+  assert.equal(list.status, 200);
+  assert.ok(list.data.some((req) => req.email === 'newadmin@example.com'));
+
+  const reqId = submit.data.request.id;
+  const approve = await api('PUT', `/api/admin/access-requests/${reqId}/approve`, { token: adminToken });
+  assert.equal(approve.status, 200);
+  assert.equal(approve.data.request.status, 'approved');
+});
+
+await check('Admin user block/unblock and logs', async () => {
+  const list = await api('GET', '/api/admin/users', { token: adminToken });
+  const targetUser = list.data[0];
+  const block = await api('POST', `/api/admin/users/${targetUser.id}/block`, { token: adminToken });
+  assert.equal(block.status, 200);
+  assert.equal(block.data.user.status, 'suspended');
+
+  const unblock = await api('POST', `/api/admin/users/${targetUser.id}/unblock`, { token: adminToken });
+  assert.equal(unblock.status, 200);
+  assert.equal(unblock.data.user.status, 'active');
+
+  const auditLogs = await api('GET', '/api/admin/audit-logs', { token: adminToken });
+  assert.equal(auditLogs.status, 200);
+  assert.ok(auditLogs.data.length >= 2);
+});
+
+await check('Admin analytics, question bank, coupons, and backup', async () => {
+  const cog = await api('GET', '/api/admin/analytics/cognitive', { token: adminToken });
+  assert.equal(cog.status, 200);
+  assert.ok(cog.data.risk_distribution);
+
+  const addQ = await api('POST', '/api/admin/question-bank', {
+    token: adminToken,
+    body: { category: 'Memory', title: 'Pattern Rec', question_text: 'Recall pattern 1-2-3' },
+  });
+  assert.equal(addQ.status, 201);
+
+  const addCoupon = await api('POST', '/api/admin/coupons', {
+    token: adminToken,
+    body: { code: 'SAVE20', discount_type: 'percentage', discount_value: 20 },
+  });
+  assert.equal(addCoupon.status, 201);
+
+  const backup = await api('POST', '/api/admin/backup', { token: adminToken });
+  assert.equal(backup.status, 200);
+  assert.equal(backup.data.success, true);
+});
+
+await check('GDPR export and GDPR delete', async () => {
+  verifyEmailOtp('gdpr@example.com');
+  const reg = await api('POST', '/api/auth/register', {
+    body: { name: 'GDPR User', email: 'gdpr@example.com' },
+  });
+  const gToken = reg.data.token;
+  const gId = reg.data.user.id;
+
+  const exportData = await api('POST', `/api/users/${gId}/gdpr-export`, { token: gToken });
+  assert.equal(exportData.status, 200);
+  assert.ok(exportData.data.gdpr_export);
+
+  const delData = await api('DELETE', `/api/users/${gId}/gdpr-delete`, { token: gToken });
+  assert.equal(delData.status, 200);
+  assert.equal(delData.data.success, true);
+});
+
+await check('Vaultrix, Vigil, and VPP backend endpoints', async () => {
+  const vx = await api('GET', '/api/vaultrix/health');
+  assert.equal(vx.status, 200);
+  assert.equal(vx.data.service, 'vaultrix-backend');
+
+  const vxAdmin = await api('GET', '/api/vaultrix/admin/stats', { token: adminToken });
+  assert.equal(vxAdmin.status, 200);
+  assert.equal(vxAdmin.data.vaultrix_status, 'active');
+
+  const addDs = await api('POST', '/api/vaultrix/admin/datasets', {
+    token: adminToken,
+    body: { name: 'New Test Dataset', security: 'HIPAA-compliant' },
+  });
+  assert.equal(addDs.status, 201);
+  assert.equal(addDs.data.name, 'New Test Dataset');
+
+  const vigil = await api('GET', '/api/vigil/health');
+  assert.equal(vigil.status, 200);
+
+  const vigilSearch = await api('GET', '/api/vigil/admin/search?severity=info', { token: adminToken });
+  assert.equal(vigilSearch.status, 200);
+  assert.ok(vigilSearch.data.results.length >= 1);
+
+  const vppRun = await api('POST', '/api/vpp/forecast/run', {
+    body: { solarData: [{ timestamp: new Date().toISOString(), irradiance: 900, temperature: 25 }] },
+  });
+  assert.equal(vppRun.status, 200);
+  assert.ok(vppRun.data.forecast);
+  assert.equal(vppRun.data.modelName, 'Upgraded First Solar Forecast Model v2.0');
+
+  const vppEval = await api('POST', '/api/vpp/forecast/evaluate', {
+    body: { actual: [100, 110], predicted: [102, 108] },
+  });
+  assert.equal(vppEval.status, 200);
+  assert.ok(vppEval.data.metrics.rmse !== undefined);
+  assert.ok(vppEval.data.metrics.mape !== undefined);
+
+  const vppCompare = await api('POST', '/api/vpp/forecast/compare', {
+    body: { actual: [100, 110], upgraded: [102, 108], baseline: [95, 100] },
+  });
+  assert.equal(vppCompare.status, 200);
+  assert.ok(vppCompare.data.improvement !== undefined);
+});
+
+await check('Support Tickets, AI Rules, System Logs, and User search', async () => {
+  const ticket = await api('POST', '/api/admin/support-tickets', {
+    body: { user_email: 'user@example.com', subject: 'Login issue', message: 'Cannot login via MFA' },
+  });
+  assert.equal(ticket.status, 201);
+
+  const ticketsList = await api('GET', '/api/admin/support-tickets', { token: adminToken });
+  assert.equal(ticketsList.status, 200);
+  assert.ok(ticketsList.data.length >= 1);
+
+  const aiRule = await api('POST', '/api/admin/ai-rules', {
+    token: adminToken,
+    body: { name: 'High Stress Rule', domain: 'Stress', condition_threshold: 75, recommendation_template: 'Suggest meditation' },
+  });
+  assert.equal(aiRule.status, 201);
+
+  const sysLogs = await api('GET', '/api/admin/system-logs', { token: adminToken });
+  assert.equal(sysLogs.status, 200);
+  assert.equal(sysLogs.data.status, 'healthy');
+
+  const searchUsers = await api('GET', '/api/admin/users?search=Other', { token: adminToken });
+  assert.equal(searchUsers.status, 200);
+  assert.ok(searchUsers.data.some((u) => u.name === 'Other'));
+});
+
 // ── Teardown ─────────────────────────────────────────────────────────────────
 
 server.close();
