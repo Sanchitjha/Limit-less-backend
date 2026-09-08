@@ -54,7 +54,7 @@ if (features.email) {
   });
 }
 
-const send = async (options) => {
+export const sendEmail = async (options) => {
   if (!transporter) {
     console.warn('[email] SMTP not configured — skipped:', options.subject);
     return { sent: false, reason: 'not_configured' };
@@ -71,6 +71,7 @@ const send = async (options) => {
     return { sent: false, reason: err.message };
   }
 };
+const send = sendEmail;
 
 const planLabel = (paymentStatus) => {
   switch (paymentStatus) {
