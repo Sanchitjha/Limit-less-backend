@@ -88,4 +88,38 @@ router.patch('/:id', requireSelfOrAdmin('id'), async (req, res) => {
   });
 });
 
+/** POST /api/users/:id/gdpr-export — Download comprehensive user data package */
+router.post('/:id/gdpr-export', requireSelfOrAdmin('id'), async (req, res) => {
+  if (!validId(req.params.id)) return res.status(404).json({ error: 'User not found' });
+
+  const user = await User.findById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const assessments = await Assessment.find({ user_id: user._id }).sort({ created_at: -1 });
+
+  res.json({
+    gdpr_export: {
+      exported_at: new Date().toISOString(),
+      user_profile: sanitizeUser(user, { includeCredentials: true }),
+      assessments: assessments.map(sanitizeAssessment),
+    },
+  });
+});
+
+/** DELETE /api/users/:id/gdpr-delete — Right to be forgotten (permanent data erasure) */
+router.delete('/:id/gdpr-delete', requireSelfOrAdmin('id'), async (req, res) => {
+  if (!validId(req.params.id)) return res.status(404).json({ error: 'User not found' });
+
+  const user = await User.findByIdAndDelete(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const { deletedCount } = await Assessment.deleteMany({ user_id: user._id });
+
+  res.json({
+    success: true,
+    message: 'User account and associated data permanently erased per GDPR request.',
+    deletedAssessmentsCount: deletedCount,
+  });
+});
+
 export default router;
