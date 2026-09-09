@@ -72,6 +72,7 @@ export const config = {
     from: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
   },
   adminNotifyEmail: process.env.ADMIN_NOTIFY_EMAIL || '',
+  atulEmail: process.env.ATUL_EMAIL || '',
   frontendUrl: (process.env.FRONTEND_URL || '').replace(/\/+$/, ''),
 
   // Social sign-in — comma-separated list of accepted audiences, since a

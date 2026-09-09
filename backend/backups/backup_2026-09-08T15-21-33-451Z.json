@@ -1,0 +1,223 @@
+{
+  "timestamp": "2026-09-08T15-21-33-451Z",
+  "counts": {
+    "users": 8,
+    "assessments": 0,
+    "plans": 1,
+    "enquiries": 0,
+    "auditLogs": 3
+  },
+  "data": {
+    "users": [
+      {
+        "_id": "6aa027fb1c2bcca7f30b1d47",
+        "name": "Own Pw",
+        "email": "ownpw@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": null,
+        "password_hash": "$2b$10$6ALa4YSE/cYriAFbGayZ5uohcgYzVMAaAGs62X0xfvekxnPZ0skAu",
+        "password_reset_required": false,
+        "email_verified": false,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:31.105Z",
+        "updated_at": "2026-09-08T15:21:31.105Z"
+      },
+      {
+        "_id": "6aa027fb1c2bcca7f30b1d4c",
+        "name": "Cooldown",
+        "email": "cooldown@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": "Q94E953T",
+        "password_hash": "$2b$10$1O9tHNdA289/r/tWXCIKIu7WxCzIEljdxL443XKwpWzW1YrfPz.Be",
+        "password_reset_required": true,
+        "email_verified": false,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:31.733Z",
+        "updated_at": "2026-09-08T15:21:31.733Z"
+      },
+      {
+        "_id": "6aa027fc1c2bcca7f30b1d56",
+        "name": "Google User",
+        "email": "social.google@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": null,
+        "password_hash": null,
+        "password_reset_required": false,
+        "email_verified": true,
+        "google_id": "google-sub-12345",
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:32.365Z",
+        "updated_at": "2026-09-08T15:21:32.365Z"
+      },
+      {
+        "_id": "6aa027fc1c2bcca7f30b1d5a",
+        "name": "Apple User",
+        "email": "social.apple@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": null,
+        "password_hash": null,
+        "password_reset_required": false,
+        "email_verified": true,
+        "apple_id": "apple-sub-99999",
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:32.396Z",
+        "updated_at": "2026-09-08T15:21:32.396Z"
+      },
+      {
+        "_id": "6aa027fc1c2bcca7f30b1d5b",
+        "name": "Apple Link Target",
+        "email": "apple.link.target@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": null,
+        "password_hash": "$2b$10$o5UQHI8YIZmhhUZH2gp7p.6cgpRyepNAiHzE5/hWNZIkgFBge3zAe",
+        "password_reset_required": false,
+        "email_verified": true,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:32.482Z",
+        "updated_at": "2026-09-08T15:21:32.489Z",
+        "apple_id": "apple-sub-for-existing-account"
+      },
+      {
+        "_id": "6aa027fc1c2bcca7f30b1d5f",
+        "name": "Pdf Snoop",
+        "email": "pdf.snoop@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": null,
+        "password_hash": "$2b$10$JHMx67XBu7znm9TzBmK1x.Qj3.iUCgCGIzMsOAHVv9mF8zR8199ya",
+        "password_reset_required": false,
+        "email_verified": false,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:32.694Z",
+        "updated_at": "2026-09-08T15:21:32.694Z"
+      },
+      {
+        "_id": "6aa027fd1c2bcca7f30b1d69",
+        "name": "Other Owner",
+        "email": "other.owner@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": "3KV5GOZ1",
+        "password_hash": "$2b$10$9yUEpIJl8QVzdrOdjndjd.a4prKrpjD4B.9yyGSaYiNfX37mqWLu2",
+        "password_reset_required": true,
+        "email_verified": false,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:33.038Z",
+        "updated_at": "2026-09-08T15:21:33.038Z"
+      },
+      {
+        "_id": "6aa027fd1c2bcca7f30b1d6e",
+        "name": "Other",
+        "email": "other@example.com",
+        "role": "user",
+        "status": "active",
+        "mfa_enabled": false,
+        "temp_password": "RZ7OZM0D",
+        "password_hash": "$2b$10$/dHD.XDky/Jm3BEfb87jBe3y0.gtApuOIKXUJg86DmNRcKtdzCa6W",
+        "password_reset_required": true,
+        "email_verified": false,
+        "payment_status": "pending",
+        "age": null,
+        "gender": null,
+        "last_login_at": null,
+        "created_at": "2026-09-08T15:21:33.233Z",
+        "updated_at": "2026-09-08T15:21:33.417Z"
+      }
+    ],
+    "assessments": [],
+    "plans": [
+      {
+        "_id": "6aa027f21c2bcca7f30b1d44",
+        "name": "Premium Report",
+        "price": 19,
+        "currency": "USD",
+        "interval": "one_time",
+        "features": [
+          "Full cognitive report",
+          "Personalized recommendations",
+          "Cognitive age estimate",
+          "Lifestyle assessment",
+          "Downloadable PDF"
+        ],
+        "is_active": true,
+        "created_at": "2026-09-08T15:21:22.812Z",
+        "updated_at": "2026-09-08T15:21:22.812Z"
+      }
+    ],
+    "enquiries": [],
+    "auditLogs": [
+      {
+        "_id": "6aa027fd1c2bcca7f30b1d71",
+        "admin_id": "admin",
+        "action": "approve_admin_access",
+        "target_resource": "AdminAccessRequest",
+        "target_id": "6aa027fd1c2bcca7f30b1d70",
+        "changes": {
+          "email": "newadmin@example.com",
+          "status": "approved"
+        },
+        "ip_address": "",
+        "created_at": "2026-09-08T15:21:33.390Z"
+      },
+      {
+        "_id": "6aa027fd1c2bcca7f30b1d72",
+        "admin_id": "admin",
+        "action": "block_user",
+        "target_resource": "User",
+        "target_id": "6aa027fd1c2bcca7f30b1d6e",
+        "changes": {
+          "email": "other@example.com",
+          "status": "suspended"
+        },
+        "ip_address": "",
+        "created_at": "2026-09-08T15:21:33.411Z"
+      },
+      {
+        "_id": "6aa027fd1c2bcca7f30b1d73",
+        "admin_id": "admin",
+        "action": "unblock_user",
+        "target_resource": "User",
+        "target_id": "6aa027fd1c2bcca7f30b1d6e",
+        "changes": {
+          "email": "other@example.com",
+          "status": "active"
+        },
+        "ip_address": "",
+        "created_at": "2026-09-08T15:21:33.418Z"
+      }
+    ]
+  }
+}

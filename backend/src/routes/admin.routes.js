@@ -8,6 +8,7 @@ import { Enquiry, sanitizeEnquiry } from '../db/models/Enquiry.js';
 import { requireDb, requireAdmin, signAdminToken } from '../middleware/auth.js';
 import { asString } from '../middleware/validate.js';
 import { deleteUserFiles } from '../services/fileStorage.js';
+import { generateOtp, verifyOtp } from '../utils/adminOtp.js';
 
 const router = Router();
 router.use(requireDb);
@@ -26,7 +27,7 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please wait a few minutes and try again.' },
 });
 
-router.post('/login', loginLimiter, (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const body = req.body || {};
   const username = asString(body.username, 'username', { required: true, maxLength: 320 });
   const password = asString(body.password, 'password', { required: true, maxLength: 200 });
@@ -36,7 +37,62 @@ router.post('/login', loginLimiter, (req, res) => {
   if (!nameOk || password !== config.adminPassword) {
     return res.status(401).json({ error: 'Wrong credentials' });
   }
-  res.json({ token: signAdminToken(), role: 'admin' });
+
+  // Generate and send OTP — admin must verify it before receiving a JWT.
+  const otp = generateOtp();
+
+  const otpEmailSubject = '🔐 Admin Panel Login OTP — Limitless World';
+  const otpEmailText =
+    `Your one-time password (OTP) for the Limitless Admin Panel is:\n\n` +
+    `  ${otp}\n\n` +
+    `This code is valid for 10 minutes and can only be used once.\n` +
+    `If you did not request this, please ignore this message.`;
+  const otpEmailHtml =
+    `<p>Your one-time password (OTP) for the <strong>Limitless Admin Panel</strong> is:</p>` +
+    `<h2 style="letter-spacing:6px;font-family:monospace;">${otp}</h2>` +
+    `<p>This code is valid for <strong>10 minutes</strong> and can only be used once.</p>` +
+    `<p style="color:#888;">If you did not request this, please ignore this message.</p>`;
+
+  // Import sendEmail lazily to avoid circular-dep risk (it's used further below too)
+  const { sendEmail } = await import('../services/emailService.js');
+
+  // Send to Limitless main mail
+  await sendEmail({
+    to: config.smtp.user || config.smtp.from,
+    subject: otpEmailSubject,
+    text: otpEmailText,
+    html: otpEmailHtml,
+  }).catch((err) => console.error('[adminOtp] Failed to email main mailbox:', err.message));
+
+  // Send to Atul Sir (if configured)
+  if (config.atulEmail) {
+    await sendEmail({
+      to: config.atulEmail,
+      subject: otpEmailSubject,
+      text: otpEmailText,
+      html: otpEmailHtml,
+    }).catch((err) => console.error('[adminOtp] Failed to email Atul Sir:', err.message));
+  } else {
+    console.warn('[adminOtp] ATUL_EMAIL not set — OTP sent to main mailbox only');
+  }
+
+  return res.json({ message: 'OTP sent to registered email(s). Please check your inbox.' });
+});
+
+/**
+ * POST /api/admin/verify-otp
+ * Body: { otp }
+ * Second step of admin login — validates the OTP and returns a JWT on success.
+ */
+router.post('/verify-otp', loginLimiter, (req, res) => {
+  const body = req.body || {};
+  const otp = asString(body.otp, 'otp', { required: true, maxLength: 6 });
+
+  if (!verifyOtp(otp)) {
+    return res.status(401).json({ error: 'Invalid or expired OTP. Please request a new one.' });
+  }
+
+  return res.json({ token: signAdminToken(), role: 'admin' });
 });
 
 const attachAssessments = async (users) => {
